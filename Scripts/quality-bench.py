@@ -28,6 +28,7 @@ FLIP is optional: if the `flip-evaluator` package isn't importable the run still
 Exit code: 0 if every technique is within threshold (or --update-baseline), 1 on a regression/failure.
 """
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -48,10 +49,20 @@ except ImportError:
 
 DEFAULT_SCENE = "Projects/Sandbox/assets/scenes/Sponza.world"
 
-# Viewpoint name -> pose (None = use the committed <scene>.world.editor sidecar, i.e. the authored
-# editor camera). Multi-viewpoint via sidecar write/restore is a follow-up; today the single default
-# viewpoint is used, which is enough to establish the gate.
-VIEWPOINTS = {"default": None}
+# Viewpoints (#158). Captured in the RUNTIME (deterministic fixed viewport, no editor panels), pinned
+# per viewpoint via the camera.override CVar (see camera_env). pose = {pos:[x,y,z], rot:[pitch,yaw,roll]
+# radians}. All share a known-good position and vary orientation so none point into the void, while
+# covering different content (atrium, floor, upper gallery) that stresses AO/GI/reflections differently.
+# Averaging FLIP across these is what the auto-tuner (#161) minimizes, to avoid single-view overfit.
+_SPONZA_POS = [8.519126892089844, 1.4949023723602295, -0.4308139383792877]
+VIEWPOINTS = {
+    "atrium":  {"pos": _SPONZA_POS, "rot": [0.027, 1.496, 0.0]},  # committed default: sunlit atrium down the nave
+    "floor":   {"pos": _SPONZA_POS, "rot": [0.55, 1.496, 0.0]},   # tilt down: floor (AO/GI on the ground)
+    "gallery": {"pos": _SPONZA_POS, "rot": [-0.5, 1.496, 0.0]},   # tilt up: upper gallery + sky (reflections/GI)
+}
+# Dropped two candidate orientations that rendered degenerate content from this spot (validated via the
+# capture stats): yaw+pi faced a near-black wall (99.7% dark), and the side yaw was 78.7% dark / 0% bright.
+# More/better viewpoints (from other positions) are trivial to add via camera.override.
 
 # The path-traced reference: unbiased (clamps off), progressive -- --ref-frames controls convergence.
 REF_ENV = {
@@ -72,6 +83,32 @@ TECHNIQUES = {
     "all-rt": {"SS_RENDER_SHADOWS_MODE": "2", "SS_RENDER_AO_MODE": "2",
                "SS_RENDER_REFLECTIONS_MODE": "2", "SS_RENDER_GI_RT": "1", "SS_RENDER_AA": "2"},
 }
+
+
+# Canonical metric resolution. The capture size = the editor viewport = window minus panels, which is
+# NOT deterministic across launches (observed 1177x649 and 1817x1009 in the same session), so raw captures
+# can mismatch shape -> broken comparisons. Every capture is bilinear-resized to this fixed size before any
+# metric, which (a) makes the gate deterministic across sessions/machines and (b) lets ref vs technique
+# always compare 1:1. Chosen below both observed native sizes so it only ever downscales. The engine-side
+# fixed-resolution render (#162) is the cleaner fix that avoids the resample; this is the metric-domain one.
+CANON_W, CANON_H = 1024, 576
+
+
+def _resize_bilinear(img: "np.ndarray", out_h: int, out_w: int) -> "np.ndarray":
+    in_h, in_w = img.shape[:2]
+    if (in_h, in_w) == (out_h, out_w):
+        return img
+    ys = np.clip((np.arange(out_h) + 0.5) * in_h / out_h - 0.5, 0, in_h - 1)
+    xs = np.clip((np.arange(out_w) + 0.5) * in_w / out_w - 0.5, 0, in_w - 1)
+    y0 = np.floor(ys).astype(int)
+    x0 = np.floor(xs).astype(int)
+    y1 = np.minimum(y0 + 1, in_h - 1)
+    x1 = np.minimum(x0 + 1, in_w - 1)
+    wy = (ys - y0)[:, None, None]
+    wx = (xs - x0)[None, :, None]
+    top = img[y0][:, x0] * (1 - wx) + img[y0][:, x1] * wx
+    bot = img[y1][:, x0] * (1 - wx) + img[y1][:, x1] * wx
+    return top * (1 - wy) + bot * wy
 
 
 # ---- metrics (offline, numpy) ------------------------------------------------------------------
@@ -149,14 +186,21 @@ def flip(a: "np.ndarray", b: "np.ndarray"):
 # ---- capture -----------------------------------------------------------------------------------
 
 def run_capture(env_overrides: dict, out_base: Path, frames: int, exe: Path, cwd: Path,
-                timeout: int, layer_path: Path, scene: str):
-    """Run one headless capture; return (rgb_image[H,W,4] float, device_str) or (None, '')."""
+                timeout: int, layer_path: Path, scene: str, max_frames: int = 0):
+    """Run one headless capture; return (rgb_image[H,W,4] float, device_str) or (None, '').
+    max_frames > 0 sets the hard capture cap: for the PT reference leave it 0 (converges via epsilon),
+    but a real-time technique NEVER settles below the auto-stop epsilon (RT GI/AO/TAA keep a per-frame
+    noise floor), so uncapped it burns the full 3000-frame safety cap (~100s/capture). Capping it at a
+    small fixed value force-captures a deterministic settle window in ~7s -- and is more honest than
+    3000 static frames, which over-accumulate TAA/RT beyond any real real-time frame."""
     ldr = out_base.with_name(out_base.name + "_ldr.npy")
     if ldr.exists():
         ldr.unlink()
 
     env = os.environ.copy()
     env["SS_QUALITY_CAPTURE_FRAMES"] = str(frames)
+    if max_frames > 0:
+        env["SS_QUALITY_CAPTURE_MAXFRAMES"] = str(max_frames)
     env["SS_QUALITY_CAPTURE_PATH"] = str(out_base)
     env["SS_STARTUP_SCENE"] = scene
     env["SS_VALIDATION_NONFATAL"] = "1"
@@ -165,16 +209,26 @@ def run_capture(env_overrides: dict, out_base: Path, frames: int, exe: Path, cwd
     if layer_path and layer_path.is_dir():
         env["VK_ADD_LAYER_PATH"] = str(layer_path)
 
-    try:
-        proc = subprocess.run([str(exe)], cwd=str(cwd), env=env, capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        print(f"  FAIL (timed out after {timeout}s)")
-        return None, ""
-    if proc.returncode != 0:
-        print(f"  FAIL (exit code {proc.returncode})")
-        return None, ""
-    if not ldr.exists():
-        print(f"  FAIL (no capture written to {ldr})")
+    # Retry transient failures. Rapid repeated launches occasionally flake (Vulkan/driver init, a lost
+    # device, a missed readback) -> a one-off None would poison the tuner's objective as inf and wrongly
+    # reject an otherwise-good config, so give each capture a couple of attempts before giving up.
+    proc = None
+    for attempt in range(3):
+        if ldr.exists():
+            ldr.unlink()
+        try:
+            proc = subprocess.run([str(exe)], cwd=str(cwd), env=env, capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            print(f"  FAIL (timed out after {timeout}s){' -- retrying' if attempt < 2 else ''}")
+            continue
+        if proc.returncode != 0:
+            print(f"  FAIL (exit code {proc.returncode}){' -- retrying' if attempt < 2 else ''}")
+            continue
+        if not ldr.exists():
+            print(f"  FAIL (no capture written to {ldr}){' -- retrying' if attempt < 2 else ''}")
+            continue
+        break
+    else:
         return None, ""
 
     device = ""
@@ -183,12 +237,70 @@ def run_capture(env_overrides: dict, out_base: Path, frames: int, exe: Path, cwd
         if any(v in low for v in ("radeon", "geforce", "nvidia", "intel(r)", "arc ", " gpu ")):
             device = line.split("SNOWSTORM:")[-1].strip()[:64]
             break
-    img = np.load(ldr).astype(np.float64)
+    # Normalize to the canonical metric resolution so window-size nondeterminism can't cause shape
+    # mismatches / non-comparable metrics (see CANON_W/H).
+    img = _resize_bilinear(np.load(ldr).astype(np.float64), CANON_H, CANON_W)
     return img, device
+
+
+# The PT reference is deterministic given (scene, viewpoint, ref-frames, PT code, GPU), and the 400-frame
+# accumulation is by far the most expensive capture. So cache it to disk keyed on a content hash of
+# everything that changes the reference image; a subsequent run (another gate invocation, a tuner session)
+# that only varies real-time CVars reuses the cached ground truth instead of re-accumulating it. The key
+# includes the PT shader sources (recompiled at runtime, so they don't bump the exe) AND the runtime exe
+# mtime (engine C++ PT path) AND the scene-file mtime, so any of those changing re-captures automatically.
+# Known limitation: a material/mesh/texture edit that doesn't touch the .world file or rebuild the exe is
+# NOT detected -- use --fresh-ref after such an edit. Cache dir is gitignored (per-machine, like baselines).
+_REF_CACHE_VERSION = 1  # bump to invalidate all cached references on a format/keying change
+_PT_SOURCES = ["Engine/Shaders/PathTrace.comp.hlsl", "Engine/Shaders/Include/Engine.hlsli"]
+
+
+def _reference_key(repo_root: Path, exe: Path, scene: str, pose, ref_frames: int) -> str:
+    h = hashlib.sha256()
+    h.update(f"v{_REF_CACHE_VERSION}|{scene}|{ref_frames}|".encode())
+    h.update(",".join(f"{v}" for v in (list(pose["pos"]) + list(pose["rot"]))).encode() if pose else b"none")
+    for rel in _PT_SOURCES:
+        p = repo_root / rel
+        h.update(p.read_bytes() if p.exists() else b"missing")
+    for p in (exe, repo_root / scene):
+        h.update(str(p.stat().st_mtime_ns).encode() if p.exists() else b"0")
+    return h.hexdigest()[:16]
+
+
+def capture_reference(vp: str, pose, ref_frames: int, exe: Path, repo_root: Path, timeout: int,
+                      layer_path: Path, scene: str, tmp: Path, fresh: bool = False):
+    """Return the PT reference image [H,W,4], reusing a disk cache unless the key changed or `fresh`.
+    Returns (img, device, cached_bool) or (None, '', False) on capture failure."""
+    cache_dir = repo_root / "Scripts" / ".quality-ref-cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    key = _reference_key(repo_root, exe, scene, pose, ref_frames)
+    cache_npy = cache_dir / f"{vp}__{key}.npy"
+
+    if cache_npy.exists() and not fresh:
+        try:
+            return np.load(cache_npy), "", True
+        except Exception as e:
+            print(f"  note: cached reference unreadable ({e}); re-capturing.")
+
+    img, dev = run_capture({**REF_ENV, **camera_env(pose)}, tmp / f"{vp}_ref", ref_frames, exe, repo_root,
+                           timeout, layer_path, scene)
+    if img is not None:
+        np.save(cache_npy, img)
+    return img, dev, False
 
 
 def baseline_path(repo_root: Path, viewpoint: str, technique: str) -> Path:
     return repo_root / "Scripts" / "quality-baseline" / f"{viewpoint}__{technique}.json"
+
+
+def camera_env(pose) -> dict:
+    # Pin the runtime camera to this viewpoint via the camera.override CVar (RuntimeLayer applies it before
+    # the first update, so the free-look controller seeds from it and holds). pose = {pos:[x,y,z],
+    # rot:[pitch,yaw,roll] radians}; None = leave the scene's authored camera. Replaces the editor sidecar.
+    if pose is None:
+        return {}
+    vals = list(pose["pos"]) + list(pose["rot"])
+    return {"SS_CAMERA_OVERRIDE": ",".join(f"{v}" for v in vals)}
 
 
 def regressed(metric: str, base: float, cur: float, threshold_pct: float) -> bool:
@@ -215,12 +327,16 @@ def main() -> int:
     ap.add_argument("--threshold", type=float, default=10.0, help="Regression tolerance %% (default 10)")
     ap.add_argument("--scene", default=DEFAULT_SCENE, help="Scene to benchmark")
     ap.add_argument("--update-baseline", action="store_true", help="Write current metrics as the new baseline")
+    ap.add_argument("--fresh-ref", action="store_true", help="Ignore the cached PT reference and re-capture it")
+    ap.add_argument("--tech-maxframes", type=int, default=200, help="Hard frame cap for real-time technique captures "
+                    "(they never converge below the auto-stop epsilon; uncapped they burn the full 3000-frame safety "
+                    "cap ~100s each). Default 200 -> ~7s/capture. The PT reference is uncapped (converges).")
     args = ap.parse_args()
 
     repo_root = Path(__file__).resolve().parent.parent
     build_dir = (repo_root / args.build_dir).resolve()
     layer_path = (repo_root / "vcpkg" / "installed" / args.triplet / "bin").resolve()
-    exe = build_dir / f"Snowstorm-Editor/{args.config}/Snowstorm-Editor.exe"
+    exe = build_dir / f"Snowstorm-Runtime/{args.config}/Snowstorm-Runtime.exe"
     if not exe.exists():
         print(f"FAIL: executable not found at {exe} (build first, or check --config)")
         return 1
@@ -242,10 +358,13 @@ def main() -> int:
     print(f"Mode      : {'UPDATE BASELINE' if args.update_baseline else 'compare vs baseline'}\n")
 
     all_ok = True
-    for vp in VIEWPOINTS:
-        print(f"=== viewpoint '{vp}': capturing path-traced reference ({args.ref_frames} frames) ===")
-        ref_img, ref_dev = run_capture(REF_ENV, tmp / f"{vp}_ref", args.ref_frames, exe, repo_root,
-                                       max(args.timeout, args.ref_frames // 2 + 60), layer_path, args.scene)
+    for vp, pose in VIEWPOINTS.items():
+        cam = camera_env(pose)  # SS_CAMERA_OVERRIDE for this viewpoint (runtime); no scene/sidecar mutation
+        ref_img, ref_dev, cached = capture_reference(vp, pose, args.ref_frames, exe, repo_root,
+                                                     max(args.timeout, args.ref_frames // 2 + 60), layer_path,
+                                                     args.scene, tmp, fresh=args.fresh_ref)
+        src = "cached reference" if cached else f"captured path-traced reference ({args.ref_frames} frames)"
+        print(f"=== viewpoint '{vp}': {src} ===")
         if ref_img is None:
             print("  reference capture FAILED; skipping viewpoint.\n")
             all_ok = False
@@ -253,8 +372,8 @@ def main() -> int:
 
         for tech, env in techniques.items():
             print(f"--- {vp} / {tech} ---")
-            img, dev = run_capture(env, tmp / f"{vp}_{tech}", args.frames, exe, repo_root,
-                                   args.timeout, layer_path, args.scene)
+            img, dev = run_capture({**env, **cam}, tmp / f"{vp}_{tech}", args.frames, exe, repo_root,
+                                   args.timeout, layer_path, args.scene, max_frames=args.tech_maxframes)
             if img is None:
                 all_ok = False
                 continue

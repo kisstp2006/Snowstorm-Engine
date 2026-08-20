@@ -23,7 +23,14 @@ namespace Snowstorm::CVars
 	// this many times (so a static camera accumulates the reference path tracer / warms the real-time path),
 	// then copy the final present (LDR sRGB) + HDR scene color to disk as .npy and exit. Scripts/quality-bench.py
 	// drives (viewpoint x technique) runs and diffs FLIP/PSNR/SSIM against a committed baseline. CLI/env-only.
-	extern CVar<int> QualityCaptureFrames;
+	// Override the resolved viewport camera pose at startup: "px,py,pz,rx,ry,rz" (world position + Euler
+	// rotation in radians), empty = off. Lets a headless harness (quality-bench, #158) pin a deterministic
+	// viewpoint in the runtime without editing the scene. Applied in RuntimeLayer::ConfigureSceneCamera.
+	extern CVar<std::string> CameraOverride;
+
+	extern CVar<int> QualityCaptureFrames;       // MIN settle frames after streaming before convergence can trigger
+	extern CVar<int> QualityCaptureMaxFrames;    // hard safety cap on total frames (capture anyway + warn if hit)
+	extern CVar<float> QualityCaptureEpsilon;    // converged when the mean per-channel present delta (/255) drops below this
 	extern CVar<std::string> QualityCapturePath; // output basename; writes <path>_ldr.npy + <path>_hdr.npy
 
 	// Toggle VSync every N frames (0 = off). A test hook: recreating the swapchain repeatedly under
@@ -304,6 +311,10 @@ namespace Snowstorm::CVars
 	// Multiplier on the IBL ambient contribution. Separate from SkyIntensity because the irradiance cube
 	// is already cosine-convolved (different scale than the analytic hemisphere lerp); tune to taste.
 	extern CVar<float> IBLIntensity;
+
+	// #163: fade the un-occluded env-cube SPECULAR ambient by roughness when RT GI is active (0 = off, 1 =
+	// full). Corrects the RT-GI-on shadow over-fill that the path-traced reference exposed.
+	extern CVar<float> GISpecAmbientFade;
 
 	// Ambient-occlusion technique (#151), a mode CVar (mirrors render.shadows.mode) for a clean thesis A/B:
 	// 0 = Off, 1 = SSAO (screen-space, any GPU), 2 = RT (hardware ray query, RT GPU only). Both techniques

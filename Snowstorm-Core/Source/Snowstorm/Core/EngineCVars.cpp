@@ -11,9 +11,15 @@ namespace Snowstorm::CVars
 
 	CVar<std::string> PerfBenchPath{"perf.bench.path", "perf-bench.json", "Output path for the perf.bench.frames JSON dump.", CVarFlags::ReadOnly};
 
-	CVar<int> QualityCaptureFrames{"quality.capture.frames", 0, "Headless image-quality capture (#153): render N frames (a static camera lets the reference path tracer accumulate), then dump the final present (LDR sRGB) + HDR scene color to disk as .npy and exit (0 = off). Driven by Scripts/quality-bench.py, which diffs FLIP/PSNR/SSIM vs a committed baseline.", CVarFlags::ReadOnly};
+	CVar<std::string> CameraOverride{"camera.override", "", "Override the viewport camera pose at startup: \"px,py,pz,rx,ry,rz\" (world position + Euler rotation in radians), empty = off. Headless harness hook (#158) to pin a deterministic viewpoint in the runtime without editing the scene.", CVarFlags::ReadOnly};
 
-	CVar<std::string> QualityCapturePath{"quality.capture.path", "quality-capture", "Output basename for quality.capture.frames; writes <path>_ldr.npy (RGBA8 sRGB) + <path>_hdr.npy (RGBA16F). Relative to the working directory.", CVarFlags::ReadOnly};
+	CVar<int> QualityCaptureFrames{"quality.capture.frames", 0, "Headless image-quality capture (#153): when > 0, dump the final present (LDR sRGB) to disk as .npy and exit. This is the SETTLE WINDOW -- the number of frames to keep rendering AFTER asset streaming completes (PendingLoadCount hits 0), so the path tracer has accumulated / the real-time denoisers have converged from a steady-state scene rather than a fixed frame-from-zero that could capture half-loaded content (#160). Driven by Scripts/quality-bench.py.", CVarFlags::ReadOnly};
+
+	CVar<int> QualityCaptureMaxFrames{"quality.capture.maxframes", 3000, "Hard safety cap for quality.capture (#160): if streaming never finishes / convergence never triggers within this many total frames, capture anyway and log a warning, so a broken scene can't hang the headless run. Must exceed the streaming warmup + quality.capture.frames.", CVarFlags::ReadOnly};
+
+	CVar<float> QualityCaptureEpsilon{"quality.capture.epsilon", 0.0005f, "Convergence threshold for quality.capture (#153/#160): the image is captured once the mean per-channel change of the tonemapped present between successive checkpoints falls below this fraction of full white (i.e. the path tracer has accumulated / real-time TAA+denoisers have settled). Smaller = stricter (more frames), so no magic frame count. Measured on Sponza: 0.0015 -> ~217 PT frames but ~2.7% off a strict run; 0.0003 -> ~919 frames. Default 0.0005 balances a clean reference against capture time. The PT ref is captured once and cached. Real-time RT captures never reach this epsilon (RT GI/AO/TAA keep a permanent per-frame noise floor), so the harness frame-caps them instead (quality-bench --tech-maxframes, ~200); their FLIP is already converged by then, so the cap costs no accuracy.", CVarFlags::ReadOnly};
+
+	CVar<std::string> QualityCapturePath{"quality.capture.path", "quality-capture", "Output basename for quality.capture.frames; writes <path>_ldr.npy (RGBA8 sRGB). Relative to the working directory.", CVarFlags::ReadOnly};
 
 	CVar<int> VSyncStress{"debug.vsync_stress", 0, "Toggle VSync every N frames (0 = off) to exercise swapchain recreation under validation — surfaces present-semaphore reuse bugs the steady-state smoke misses"};
 
@@ -136,6 +142,8 @@ namespace Snowstorm::CVars
 	CVar<bool> IBL{"render.ibl", true, "Bake + use image-based lighting from the sky (off = analytic hemisphere ambient)", CVarFlags::Persist};
 
 	CVar<float> IBLIntensity{"render.ibl.intensity", 0.75f, "Multiplier on the IBL ambient contribution", CVarFlags::Persist};
+
+	CVar<float> GISpecAmbientFade{"render.gi.spec_ambient_fade", 1.0f, "#163: when RT GI is active, fade the un-occluded env-cube SPECULAR ambient by roughness (0 = off/old behavior, 1 = full linear roughness fade). Rough surfaces' wide env-specular lobe otherwise acts as a second un-occluded ambient overlapping the occluded diffuse GI, over-filling shadows vs the path-traced reference.", CVarFlags::Persist};
 
 	CVar<int> AoMode{"render.ao.mode", 0, "Ambient-occlusion technique (#151): 0 = Off, 1 = SSAO (screen-space hemisphere kernel + bilateral blur, any GPU), 2 = RT (hardware ray query, requires an RT GPU; falls back to Off on a non-RT device). Both write the same forward AO slot for a clean same-scene A/B. Replaces the old render.ao.rt bool (#118). RT mode traces a few rays/frame and needs TAA (render.aa = TAA) for a clean result; SSAO is temporally stable on its own.", CVarFlags::Persist};
 

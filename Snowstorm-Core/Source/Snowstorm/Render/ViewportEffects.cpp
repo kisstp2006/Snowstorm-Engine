@@ -1771,26 +1771,31 @@ namespace Snowstorm
 			void Contribute(ViewportRenderContext& v) override
 			{
 				FrameContext& fc = v.Frame;
-				// Record the capture on frame == quality.capture.frames (a static camera has accumulated the PT
-				// reference by then); the pass still ticks every frame so the retired slot gets serialized.
-				const uint64_t target = static_cast<uint64_t>(CVars::QualityCaptureFrames.Get());
-				const bool doCapture = fc.Renderer.GetFrameCounter() == target;
+				// Convergence auto-stop (#160): the pass waits for streaming to finish, then checkpoints the present
+				// and captures once its frame-to-frame change drops below epsilon (PT accumulated / TAA+denoisers
+				// settled) past a minimum settle, with a max-frame safety cap. All the state lives in the pass.
+				const bool streamingDone = !v.PathTraceSceneSettling; // PathTraceSceneSettling = PendingLoadCount>0
+				const uint64_t frame = fc.Renderer.GetFrameCounter();
+				const uint64_t minSettle = static_cast<uint64_t>(CVars::QualityCaptureFrames.Get());
+				const int maxCVar = CVars::QualityCaptureMaxFrames.Get();
+				const uint64_t maxFrame = maxCVar > 0 ? static_cast<uint64_t>(maxCVar) : UINT64_MAX;
+				const float epsilon = CVars::QualityCaptureEpsilon.Get();
 				const Ref<Texture> presentImg = v.RT.PresentTarget->GetDesc().ColorAttachments[0].View->GetTexture();
 				const std::string basePath = CVars::QualityCapturePath.Get();
 				fc.Graph.AddPass({.Name = "QualityCapture" + v.Suffix,
 				                  .IsCompute = true, // no render target; records the readback copy
 				                  .Reads = {{presentImg, RenderGraph::AccessState::Sampled}},
-				                  .Execute = [this, &fc, presentImg, doCapture, basePath](CommandContext& c)
+				                  .Execute = [this, presentImg, streamingDone, frame, minSettle, epsilon, maxFrame, basePath, &fc](CommandContext& c)
 				                  {
 					                  const Ref<CommandContext> cref(&c, [](CommandContext*) {});
-					                  const uint64_t written = m_Pass.Tick(cref, presentImg, doCapture, fc.FrameIndex, basePath);
+					                  const uint64_t written = m_Pass.Tick(cref, presentImg, streamingDone, frame, minSettle, epsilon, maxFrame, basePath);
 					                  fc.Renderer.SetQualityCaptureWritten(written);
 				                  }});
 			}
 
 		private:
 			RenderSystem& m_Owner;
-			QualityCapturePass m_Pass; // readback + .npy serialize; exclusive to this effect
+			QualityCapturePass m_Pass; // convergence detect + readback + .npy serialize; exclusive to this effect
 		};
 	}
 
