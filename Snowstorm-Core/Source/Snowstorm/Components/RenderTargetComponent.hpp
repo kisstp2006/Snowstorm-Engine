@@ -84,6 +84,12 @@ namespace Snowstorm
 		Ref<Texture> AOTarget;
 		Ref<TextureView> AOTargetView;
 
+		// Half-res SSAO blur output (#151): the SSAO technique's depth+normal bilateral blur writes AOTarget ->
+		// this, and the shared bilateral upsample reads it (v.AOView). Same Sampled|Storage RGBA16F half-res
+		// shape as AOTarget (CreateAOTarget). Used only by SSAO; the RT path routes through AODenoiser instead.
+		Ref<Texture> AOBlurTarget;
+		Ref<TextureView> AOBlurTargetView;
+
 		// Half-res AO SVGF denoiser state (#130): the third DenoiserInstance (after GI/reflections, #132) —
 		// history + moments + à-trous scratch ping-pongs + history-valid flag. Half-res (render.ao.scale, tracks
 		// AOTarget). The occlusion factor rides .r/.rgb (grey), so the shared color-path denoiser treats it as a
@@ -105,10 +111,26 @@ namespace Snowstorm
 		Ref<Texture> ReflectionTarget;
 		Ref<TextureView> ReflectionTargetView;
 
+		// Previous-frame resolved HDR scene color (#151, SSR). A late snapshot pass copies the post-resolve HDR
+		// scene color into this full-res target each frame; next frame's SSR marches the depth buffer and, on a
+		// screen-space hit, samples THIS (reprojected by the velocity buffer) as the reflected radiance — the
+		// classic forward-renderer SSR previous-frame-color source (SSR is consumed before the current forward
+		// runs, so the current color doesn't exist yet). Single-buffered (written late frame N, read early frame
+		// N+1; one graphics queue + the read barrier order it, like the TAA history). Only written when SSR is
+		// active. A RenderTarget (the snapshot is a fullscreen copy). Null until allocated.
+		Ref<RenderTarget> PrevSceneColorTarget;
+
 		// Full-res RT reflection SVGF denoiser state (#132): the reflection twin of GIDenoiser — history +
 		// moments + à-trous scratch ping-pongs + history-valid flag (was flat ReflHistory/ReflMoments/
 		// ReflDenoiseScratch fields). Full-res (reflections are high-frequency). See DenoiserInstance.
 		DenoiserInstance ReflectionDenoiser;
+
+		// Reference path-tracer accumulation buffer (#153): full-res fp32 (RGBA32_SFloat). The PT compute writes
+		// a progressive running-mean radiance here while the camera is static (reset on camera/scene move); the
+		// tonemap samples it directly as the scene color when render.pathtrace is on. Bare Texture + view (compute
+		// UAV), like GITarget. Always allocated (only written in path-trace mode). Null until allocated.
+		Ref<Texture> PathTraceAccumTarget;
+		Ref<TextureView> PathTraceAccumView;
 
 		// Temporal-resolve history ping-pong (#44 TAA). Two full-res HDR (color-only) targets: each frame
 		// the resolve reads the PREVIOUS one as history, reprojects it by the velocity buffer, blends with

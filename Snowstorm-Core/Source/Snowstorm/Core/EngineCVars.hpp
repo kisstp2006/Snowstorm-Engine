@@ -19,6 +19,13 @@ namespace Snowstorm::CVars
 	extern CVar<int> PerfBenchFrames;
 	extern CVar<std::string> PerfBenchPath;
 
+	// Headless quality capture (local image-quality gate, #153 increment 2). When > 0, let the frame render
+	// this many times (so a static camera accumulates the reference path tracer / warms the real-time path),
+	// then copy the final present (LDR sRGB) + HDR scene color to disk as .npy and exit. Scripts/quality-bench.py
+	// drives (viewpoint x technique) runs and diffs FLIP/PSNR/SSIM against a committed baseline. CLI/env-only.
+	extern CVar<int> QualityCaptureFrames;
+	extern CVar<std::string> QualityCapturePath; // output basename; writes <path>_ldr.npy + <path>_hdr.npy
+
 	// Toggle VSync every N frames (0 = off). A test hook: recreating the swapchain repeatedly under
 	// validation surfaces present/acquire-semaphore reuse bugs that steady-state running never triggers.
 	extern CVar<int> VSyncStress;
@@ -69,6 +76,12 @@ namespace Snowstorm::CVars
 	// (a hitch/freeze that N-frames-then-exit smoke otherwise passes right over) becomes a hard, headless-
 	// reproducible failure. 0 (default) disables it. First frame is exempt (one-time init/pipeline warmup).
 	extern CVar<int> MaxFrameMs;
+
+	// Skip loading the on-disk config files (SnowstormConfig.cfg + SnowstormStartup.cfg) at startup, so the
+	// app runs pure code-defaults + env/CLI only. Resolved specially, before config load (CVarRegistry::
+	// Initialize). perf-bench sets it for a config-isolated, machine-independent baseline — otherwise a
+	// persisted user setting (e.g. render.shadow.resolution) leaks in and skews the current-vs-baseline diff.
+	extern CVar<bool> ConfigIgnore;
 
 	// Log every Vulkan validation error and keep running instead of asserting on the first one.
 	extern CVar<bool> ValidationNonFatal;
@@ -137,10 +150,27 @@ namespace Snowstorm::CVars
 	// brighten, lower to darken. Runtime-tweakable from the editor's Settings panel.
 	extern CVar<float> Exposure;
 
-	// Anti-aliasing mode: 0 = None, 1 = FXAA (spatial post-process AA, runs after tonemap). A thesis
-	// baseline for the neural upscaler comparison. Runtime-tweakable from the editor's Settings panel;
-	// read per-frame by RenderSystem, so toggling it takes effect live.
+	// Anti-aliasing mode: 0 = None, 1 = FXAA (spatial post-process AA), 2 = TAA (classical temporal resolve),
+	// 3 = DLAA (the #98 neural temporal network run at NATIVE res as the temporal resolve, replacing TAA).
+	// A thesis baseline set for the AA comparison. Runtime-tweakable; read per-frame by RenderSystem.
 	extern CVar<int> AAMode;
+
+	// True when DLAA is the active AA mode (render.aa == 3): run the neural temporal resolve at native res
+	// instead of classical TAA. Single source of the "3" constant (RenderSystem, CameraJitterSystem, editor).
+	[[nodiscard]] bool DlaaActive();
+
+	// Forward-pass MSAA sample count: 1 = off, 2/4/8 = multisample the forward color+depth (geometric edge
+	// AA), resolved to single-sample before post. Does NOT touch the RT effects (they read a single-sample
+	// G-buffer) or shader/specular aliasing. APPLIES ON RESTART: the render path reads the cached
+	// MsaaSampleCount(), not this live, because the sample count is baked into targets + pipelines at startup.
+	// Persisted so the editor dropdown survives a relaunch. Orthogonal to render.aa (MSAA + TAA compose).
+	extern CVar<int> Msaa;
+
+	// render.msaa resolved ONCE (first call, after device init) and clamped to the device's max color+depth
+	// sample count and to {1,2,4,8}. Read this everywhere the forward MSAA sample count is consumed (target
+	// allocation + forward/sky/depth-prepass pipelines) so targets and pipelines always agree. Cached: a live
+	// edit to render.msaa takes effect on the next launch, not mid-run (would desync targets from pipelines).
+	[[nodiscard]] uint32_t MsaaSampleCount();
 
 	// Upscale method when render.scale < 1 (#47): 0 = bilinear (the baseline), 1 = neural (compute CNN). The
 	// neural path runs the loaded .ssnn; default identity weights reproduce bilinear. Read per-frame.
@@ -168,6 +198,7 @@ namespace Snowstorm::CVars
 	// history is treated as a different surface and rejected (removes ghost trails on disoccluded edges).
 	// 0 = off (pre-#127 behaviour), for a clean A/B.
 	extern CVar<float> TaaDepthReject;
+	extern CVar<bool> TaaDepthRejectSlope;
 
 	// Post-tonemap contrast-adaptive sharpen (AMD CAS) strength, 0..1 (#44). Display-space (runs after
 	// tonemap, like FXAA), so it's hue-safe — a sharpen in linear HDR before ACES turns overshoot into a hue
@@ -215,10 +246,19 @@ namespace Snowstorm::CVars
 	extern CVar<bool> DatasetExport;
 	extern CVar<std::string> DatasetExportPath;
 	extern CVar<int> DatasetExportFrames;
+	// Frames to skip before the first captured tuple (streaming + resolution settle). See the .cpp description.
+	extern CVar<int> DatasetExportWarmup;
 
 	// Apply camera jitter during dataset.export (#102). Off (default) = unjittered LR for the spatial
 	// upscaler; on = jittered LR for the temporal upscaler (#98).
 	extern CVar<bool> DatasetJitter;
+
+	// Ground-truth supersampling factor (DLAA #98): 1 = off, 2 = render the compare/dataset GT at 2x then
+	// box-downsample = an ANTI-ALIASED native reference. A single native GT frame is aliased and thus not a
+	// valid AA training target; SSAA is. Capture-only (the GT is a 2nd render). Clamp with ClampedGtSsaa().
+	extern CVar<int> GtSsaa;
+	// render.gt.ssaa clamped to {1,2}. Use everywhere the factor is consumed.
+	[[nodiscard]] uint32_t ClampedGtSsaa();
 
 	// Temporal sub-pixel camera jitter (#44): Halton(2,3) offset applied to the color projection each
 	// frame — the substrate a temporal upscaler/TAA accumulates. Motion vectors + frustum culling keep the
@@ -265,10 +305,13 @@ namespace Snowstorm::CVars
 	// is already cosine-convolved (different scale than the analytic hemisphere lerp); tune to taste.
 	extern CVar<float> IBLIntensity;
 
-	// Ray-traced ambient occlusion (#118): trace hemisphere occlusion rays inline in DefaultLit and darken
-	// the ambient term. Prefer AoRTActive() over reading AoRT directly. Needs TAA for a clean result (few
-	// rays/frame, temporally accumulated). AORadius = occlusion distance (world units); AOIntensity = strength.
-	extern CVar<bool> AoRT;
+	// Ambient-occlusion technique (#151), a mode CVar (mirrors render.shadows.mode) for a clean thesis A/B:
+	// 0 = Off, 1 = SSAO (screen-space, any GPU), 2 = RT (hardware ray query, RT GPU only). Both techniques
+	// write the SAME half-res AOTarget the forward pass samples, so the forward shader is agnostic to which
+	// produced it. Prefer the AoActive()/AoSSAOActive()/AoRTActive() helpers over reading the int directly.
+	// Replaces the old render.ao.rt bool (#118). AORadius = occlusion distance (world units); AOIntensity =
+	// strength; AOScale = internal resolution — all shared by both techniques.
+	extern CVar<int> AoMode;
 	extern CVar<float> AORadius;
 	extern CVar<float> AOIntensity;
 	// RTAO rays per pixel per frame (was the compile-time AO_RAY_COUNT). More rays = less per-frame noise
@@ -283,9 +326,18 @@ namespace Snowstorm::CVars
 	// render.ao.scale clamped to [0.25, 1.0]. Use everywhere the value is consumed.
 	[[nodiscard]] float ClampedAOScale();
 
-	// True when RTAO should run (render.ao.rt on AND the device supports RT). Drives the AO compute pass gate
-	// + the TLAS build gate. False on a non-RT GPU. (Post-#126 AO no longer traces in the forward shader.)
+	// True when SSAO should run (render.ao.mode == 1). Screen-space, no RT device needed. Drives the SSAO
+	// compute+blur passes; NOT the RT temporal/denoise/TLAS gates (SSAO has its own bilateral blur, #151).
+	[[nodiscard]] bool AoSSAOActive();
+
+	// True when RTAO should run (render.ao.mode == 2 AND the device supports RT). Drives the RT AO compute
+	// pass + its SVGF temporal/denoise + the TLAS build gate. False on a non-RT GPU (mode 2 degrades to Off).
+	// (Post-#126 AO no longer traces in the forward shader.)
 	[[nodiscard]] bool AoRTActive();
+
+	// True when EITHER AO technique is live (SSAO or RT). The gate the shared tail (bilateral upsample +
+	// forward AO consumption + the G-buffer prepass) uses, so both techniques reach the same forward slot (#151).
+	[[nodiscard]] bool AoActive();
 
 	// RTAO temporal accumulation (#130): reproject the previous accumulated AO factor by the motion vectors
 	// and blend with this frame's few-ray trace (depth-disocclusion reject) — reuses the shared SVGF temporal
@@ -312,11 +364,14 @@ namespace Snowstorm::CVars
 	// pass 0 => the term is a no-op, keeping the shared à-trous bit-identical for them).
 	extern CVar<float> AODenoiseHitDist;
 
-	// Ray-traced reflections (#118): trace a reflection ray inline in DefaultLit, shade the reflected hit,
-	// blend into the specular term for smooth surfaces. Prefer ReflectionsRTActive() over reading the bool.
-	// ReflectionIntensity scales the contribution; ReflectionMaxRoughness is the roughness cutoff (smoother
-	// = RT, rougher = the cheap prefiltered cube).
-	extern CVar<bool> ReflectionsRT;
+	// Reflection technique (#151), a mode CVar (mirrors render.ao.mode / render.shadows.mode) for a clean
+	// thesis A/B: 0 = Off, 1 = SSR (screen-space depth-buffer march, any GPU), 2 = RT (hardware ray query, RT
+	// GPU only). Both write the SAME forward reflection slot (ReflectionTarget), so DefaultLit is agnostic to
+	// which produced it. Prefer the ReflectionsActive()/ReflectionsSSRActive()/ReflectionsRTActive() helpers
+	// over reading the int. Replaces the old render.reflections.rt bool (#118). ReflectionIntensity scales the
+	// contribution; ReflectionMaxRoughness is the roughness cutoff (smoother = traced, rougher = the cube) —
+	// both shared by SSR and RT.
+	extern CVar<int> ReflectionsMode;
 	extern CVar<float> ReflectionIntensity;
 	extern CVar<float> ReflectionMaxRoughness;
 	extern CVar<float> ReflectionConeScale;
@@ -408,14 +463,54 @@ namespace Snowstorm::CVars
 	// Does NOT fold the GI-active/table gate — the callers already require GI to be running.
 	[[nodiscard]] bool GIDenoiseActive();
 
-	// True when RT reflections should run (render.reflections.rt on AND the device supports RT). Drives
+	// True when SSR should run (render.reflections.mode == 1). Screen-space, no RT device needed. Drives the
+	// SSR compute pass + the previous-frame color snapshot; NOT the TLAS / geometry-table / RTReflEnabled gates
+	// (SSR marches the depth buffer, #151).
+	[[nodiscard]] bool ReflectionsSSRActive();
+
+	// True when RT reflections should run (render.reflections.mode == 2 AND the device supports RT). Drives
 	// FrameCB.RTReflEnabled + the shader branch + the TLAS build gate + the geometry-table build. False on a
-	// non-RT GPU (reflection shader compiled out).
+	// non-RT GPU (mode 2 degrades to Off; reflection shader compiled out).
 	[[nodiscard]] bool ReflectionsRTActive();
+
+	// True when EITHER reflection technique is live (SSR or RT). The gate the shared tail (reflection temporal
+	// + denoise + forward consumption + the G-buffer prepass) uses, so both converge on the same forward slot (#151).
+	[[nodiscard]] bool ReflectionsActive();
 
 	// True when RT GI should run (render.gi.rt on AND the device supports RT). Drives FrameCB.RTGIEnabled +
 	// the shader branch + the TLAS build gate + the geometry-table build. False on a non-RT GPU.
 	[[nodiscard]] bool GIRTActive();
+
+	// Reference path tracer (#153): a brute-force ground-truth render mode (GGX+Lambert BSDF, sun NEE, sky
+	// environment, multi-bounce, Russian roulette) that progressively accumulates while the camera is static.
+	// NOT real-time — the correctness anchor the thesis measures the real-time techniques against. When on, it
+	// replaces the raster/RT scene path entirely. Requires an RT GPU (RayQuery); prefer PathTraceActive().
+	extern CVar<bool> PathTrace;
+	// Paths per pixel PER FRAME (progressive: total = this x frames-since-reset). Higher = faster convergence,
+	// lower interactivity. Clamp with ClampedPathTraceSpp().
+	extern CVar<int> PathTraceSpp;
+	// Max path length (bounces) before termination. Russian roulette kicks in after bounce 3 regardless.
+	extern CVar<int> PathTraceBounces;
+	[[nodiscard]] int ClampedPathTraceSpp();
+	[[nodiscard]] int ClampedPathTraceBounces();
+	// Per-sample radiance firefly clamp (world radiance units): caps each path sample so a rare very-bright
+	// path (specular NEE / caustic-ish indirect spike) can't leave a slow-to-average dot. Trades a little bias
+	// in genuine bright highlights for far cleaner convergence. 0 = unbounded (unbiased but noisy). ~8-32 typical.
+	extern CVar<float> PathTraceClamp;
+	// Path regularization: max per-bounce BSDF sample weight (throughput multiplier). A near-mirror indirect
+	// bounce at a grazing/low-pdf direction makes BSDF/pdf blow up, concentrating path weight into a fixed hot
+	// pixel that never converges; clamping the weight bounds that WITHOUT blurring reflections (unlike roughness
+	// regularization). Small bias on rare high-weight paths. 0 = off (unbiased ground truth); ~4-16 for a clean
+	// interactive preview. Set 0 for final reference captures.
+	extern CVar<float> PathTraceWeightClamp;
+	// Environment (sky) next-event estimation with MIS. On: each hit also samples the analytic sky directly (a
+	// shadow ray) and MIS-combines it with the BSDF-continuation sky hit, cutting sky-lit variance (esp. glossy).
+	// Off: sky arrives only via continuation rays (the pre-NEE integrator, bit-identical). Unbiased either way;
+	// the converged image is the same, only convergence speed differs. Mostly a dev/A-B knob.
+	extern CVar<bool> PathTraceEnvNee;
+	// True when the reference path tracer should run (render.pathtrace on AND an RT-capable device). Gates the
+	// PT pass AND the skip of the normal scene path (forward/G-buffer/upscale/temporal) so PT owns the frame.
+	[[nodiscard]] bool PathTraceActive();
 
 	// True when ANY inline-RT effect is active (shadows/AO/reflections/GI). Drives the DefaultLit shader
 	// permutation swap (#118 perf): when false, DefaultLit compiles the cheap non-RT variant so a scene with

@@ -4,6 +4,7 @@
 #include "MeshBoundsBuilder.hpp"
 #include "MeshMetaCache.hpp"
 #include "Snowstorm/Core/Application.hpp"
+#include "Snowstorm/Core/EngineCVars.hpp"
 #include "Snowstorm/Core/JobSystem.hpp"
 #include "Snowstorm/Service/ServiceManager.hpp"
 #include "Snowstorm/World/World.hpp"
@@ -817,6 +818,10 @@ namespace Snowstorm
 		// Meshes render into the offscreen scene target (not the swapchain), so the pipeline's color
 		// format must match that target — not Renderer::GetSurfaceFormat() (#62).
 		p.ColorFormats = {kSceneColorFormat};
+		// Scene material pipelines render into the (possibly multisampled) scene target, so their sample count
+		// must match it. Startup-resolved + constant for the run (see MsaaSampleCount), so a single build here is
+		// correct for both the main scene target and the full-res GT target (both allocated at the same count).
+		p.SampleCount = CVars::MsaaSampleCount();
 
 		p.DepthFormat = PixelFormat::D32_Float;
 		p.DepthStencil.EnableDepthTest = true; // TODO these shouldn't be enabled always...
@@ -913,6 +918,21 @@ namespace Snowstorm
 		// and a fresh MaterialInstance. Entities that already hold a Ref to the OLD instance keep rendering it
 		// until MaterialResolveSystem re-resolves them (the editor marks them Changed after calling this).
 		m_MaterialInstanceCache.erase(handle);
+	}
+
+	void AssetManagerSingleton::RebuildPipelinesForSampleCount(const uint32_t samples)
+	{
+		// In-place rebuild of each cached scene-material pipeline (covers DefaultLit + custom). The pipeline
+		// object no-ops when its sample count already matches, so this is cheap when nothing changed. Only the
+		// scene-target pipelines live here; the sky pipeline self-heals in SkyPass::EnsurePipeline, and post/
+		// G-buffer/velocity pipelines stay single-sample (never in this cache).
+		for (auto& [path, pipeline] : m_PipelineCache)
+		{
+			if (pipeline)
+			{
+				pipeline->SetSampleCount(samples);
+			}
+		}
 	}
 
 	void AssetManagerSingleton::ApplyMaterialAsset(Material& base, const MaterialAsset& matAsset)

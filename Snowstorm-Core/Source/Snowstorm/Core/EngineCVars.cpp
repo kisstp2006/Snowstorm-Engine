@@ -1,5 +1,6 @@
 #include "EngineCVars.hpp"
 
+#include "Snowstorm/Core/Log.hpp"
 #include "Snowstorm/Render/Renderer.hpp"
 
 namespace Snowstorm::CVars
@@ -9,6 +10,10 @@ namespace Snowstorm::CVars
 	CVar<int> PerfBenchFrames{"perf.bench.frames", 0, "Headless GPU perf benchmark: run N frames accumulating per-pass GPU timings (past warmup), write averaged JSON to perf.bench.path, then exit (0 = off). Driven by Scripts/perf-bench.py.", CVarFlags::ReadOnly};
 
 	CVar<std::string> PerfBenchPath{"perf.bench.path", "perf-bench.json", "Output path for the perf.bench.frames JSON dump.", CVarFlags::ReadOnly};
+
+	CVar<int> QualityCaptureFrames{"quality.capture.frames", 0, "Headless image-quality capture (#153): render N frames (a static camera lets the reference path tracer accumulate), then dump the final present (LDR sRGB) + HDR scene color to disk as .npy and exit (0 = off). Driven by Scripts/quality-bench.py, which diffs FLIP/PSNR/SSIM vs a committed baseline.", CVarFlags::ReadOnly};
+
+	CVar<std::string> QualityCapturePath{"quality.capture.path", "quality-capture", "Output basename for quality.capture.frames; writes <path>_ldr.npy (RGBA8 sRGB) + <path>_hdr.npy (RGBA16F). Relative to the working directory.", CVarFlags::ReadOnly};
 
 	CVar<int> VSyncStress{"debug.vsync_stress", 0, "Toggle VSync every N frames (0 = off) to exercise swapchain recreation under validation — surfaces present-semaphore reuse bugs the steady-state smoke misses"};
 
@@ -29,6 +34,8 @@ namespace Snowstorm::CVars
 	CVar<std::string> ProfileCapturePath{"profile.capture_path", "SnowstormCapture.json", "Output path for profile.capture_frames", CVarFlags::ReadOnly};
 
 	CVar<int> ProfileCaptureDelay{"profile.capture_delay", 60, "Frames to wait before profile.capture_frames starts, so startup asset streaming (in-flight loads) doesn't clobber the steady-state per-system averages. Raise for large scenes -- streaming is done when AssetLoadSystem's per-frame cost hits 0.", CVarFlags::ReadOnly};
+
+	CVar<bool> ConfigIgnore{"config.ignore", false, "Skip loading the on-disk config files (SnowstormConfig.cfg + SnowstormStartup.cfg) at startup: run pure code-defaults + env/CLI only. Used by perf-bench for a config-isolated, machine-independent baseline (a persisted setting like render.shadow.resolution otherwise leaks in and skews the diff). Startup-only.", CVarFlags::ReadOnly};
 
 	CVar<bool> ValidationNonFatal{"validation.nonfatal", false, "Log Vulkan validation errors instead of asserting on the first", CVarFlags::ReadOnly};
 
@@ -88,13 +95,19 @@ namespace Snowstorm::CVars
 
 	CVar<int> DatasetExportFrames{"dataset.export.frames", 0, "Stop the app after this many dataset tuples have been written to disk (0 = run until the window closes). Lets a headless capture run produce a fixed-size dataset then exit."};
 
+	CVar<int> DatasetExportWarmup{"dataset.export.warmup", 60, "Frames to skip before the FIRST dataset tuple is captured. Early headless-capture frames are pre-content (asset streaming + TLAS build unfinished) and the viewport resolution is still settling — capturing them pollutes the set with blank/wrong-size tuples. Skipping N leaves every written frame steady-state + same-size (on-disk index still starts at 0). Mirrors profile.capture_delay."};
+
+	CVar<int> GtSsaa{"render.gt.ssaa", 1, "Ground-truth supersampling factor for the compare/dataset reference (1 = off, 2 = render the GT at 2x then box-downsample = anti-aliased reference). For a DLAA dataset the GT must be ANTI-ALIASED (a single native GT frame is aliased and not a valid AA target); SSAA is that reference. Capture-only cost (the GT is a 2nd render); clamped to {1,2}.", CVarFlags::Persist};
+
 	CVar<int> Upscaler{"render.upscaler", 0, "Upscale method when render.scale < 1: 0 = Bilinear (baseline), 1 = Neural Spatial (compute CNN residual refiner, single frame, #47), 2 = Neural Temporal (adds MV-warped previous-output + motion vector as extra inputs, DLSS/XeSS-style, #98). Both neural modes run the loaded .ssnn model; with the default identity weights each reproduces bilinear (the correctness baseline). Read per-frame; only active when upscaling (scale < 1). The temporal mode also forces the velocity pass on.", CVarFlags::Persist};
 
 	CVar<std::string> NeuralWeightsPath{"neural.weights", "", "Path to a trained .ssnn weights file for the neural upscaler (#99). Empty = the built-in identity refiner (reproduces bilinear). Loaded lazily when it changes. Used when render.upscaler = 1 (spatial, 3-ch input) or 2 (temporal, 8-ch input) — the model's first-layer width must match the selected mode, or the pass falls back to identity.", CVarFlags::Persist};
 
 	CVar<std::string> NeuralDumpIdentity{"neural.dump_identity", "", "One-shot: write the built-in identity refiner to this .ssnn path, then exit (#99). The canonical reference the Python .ssnn writer's byte-parity test compares against. Empty = off."};
 
-	CVar<int> AAMode{"render.aa", 0, "Anti-aliasing: 0 = None, 1 = FXAA (spatial post-process), 2 = TAA (temporal accumulation via jitter + motion vectors, #44)", CVarFlags::Persist};
+	CVar<int> AAMode{"render.aa", 0, "Anti-aliasing: 0 = None, 1 = FXAA (spatial post-process), 2 = TAA (classical temporal accumulation via jitter + motion vectors, #44), 3 = DLAA (the #98 neural temporal network run at native res as the temporal resolve, replacing TAA)", CVarFlags::Persist};
+
+	CVar<int> Msaa{"render.msaa", 1, "Forward MSAA sample count: 1 = off, 2/4/8 = multisample the forward color+depth for geometric-edge AA, resolved before post. Does NOT cover the RT effects (single-sample G-buffer) or shader/specular aliasing. Applies live (targets + pipelines rebuilt on change); clamped to the device max.", CVarFlags::Persist};
 
 	CVar<int> DebugView{"render.debugview", 0, "Viewport debug overlay: 0 = Normal (tonemapped scene), 1 = Motion Vectors (per-pixel screen-space velocity as color; drives the velocity pass + tonemap debug branch, #44), 2 = Ambient Occlusion (DefaultLit outputs the isolated grayscale AO term for tuning RTAO, #118), 3 = Reflections (raw reflected albedo from the RT reflection trace, for verifying hit resolution, #118), 4 = Global Illumination (raw RT GI indirect term, for tuning intensity/range, #118), 5 = World Normals (the depth+normal prepass G-buffer, [-1,1] normal mapped to RGB, for verifying the half-res GI substrate, #124), 6 = Half-res GI raw (the raw half-res GI irradiance buffer, tonemapped, before the bilateral upsample, #124), 7 = Half-res GI denoised (the same buffer AFTER temporal accumulation + à-trous, the A/B against view 6 that shows what the denoiser did, #125)", CVarFlags::Persist};
 
@@ -102,7 +115,9 @@ namespace Snowstorm::CVars
 
 	CVar<float> TaaMaxBlend{"render.taa.maxblend", 0.97f, "TAA history weight when the pixel is ~static: deeper accumulation to average out specular shimmer that jitter causes on shiny surfaces (#44)", CVarFlags::Persist};
 
-	CVar<float> TaaDepthReject{"render.taa.depth_reject", 0.02f, "TAA depth-disocclusion rejection threshold: reject reprojected history whose linear depth differs by more than this fraction of view-space depth (kills ghost trails on disoccluded silhouettes). 0 = off (#127)", CVarFlags::Persist};
+	CVar<float> TaaDepthReject{"render.taa.depth_reject", 0.02f, "TAA depth-disocclusion rejection threshold: reject reprojected history whose linear depth differs by more than this fraction of view-space depth (kills ghost trails on disoccluded silhouettes). 0 = off (#127). With render.taa.depth_reject.slope on, this is the small BASE fraction added on top of the surface-slope allowance.", CVarFlags::Persist};
+
+	CVar<bool> TaaDepthRejectSlope{"render.taa.depth_reject.slope", true, "TAA disocclusion test curve (A/B). On (default) = SLOPE-AWARE: the reject threshold accounts for the depth change the surface's own slope predicts over the reprojection distance, so steep/grazing continuous surfaces aren't false-rejected (shimmer) while real disocclusions still reject (no ghost) -- removes the flat threshold's no-middle-ground tradeoff. Off = the flat relative-depth curve (pre-slope). Uses render.taa.depth_reject as the threshold either way.", CVarFlags::Persist};
 
 	CVar<float> Sharpen{"render.sharpen", 0.0f, "Post-tonemap contrast-adaptive sharpen (AMD CAS) strength, 0..1 (0 = off). Display-space + hue-safe; counters TAA/upscale softening, runs after tonemap like FXAA. Guidance: ~0.3 for native+TAA, ~0.5 when upscaling (render.scale<1); >0.7 over-sharpens and re-introduces aliasing TAA removed, so keep it light (#44)", CVarFlags::Persist};
 
@@ -122,7 +137,7 @@ namespace Snowstorm::CVars
 
 	CVar<float> IBLIntensity{"render.ibl.intensity", 0.75f, "Multiplier on the IBL ambient contribution", CVarFlags::Persist};
 
-	CVar<bool> AoRT{"render.ao.rt", false, "Ray-traced ambient occlusion (#118): trace hemisphere occlusion rays inline in DefaultLit and darken the ambient term. Requires an RT GPU (ignored otherwise). Few rays/frame + per-frame rotation — needs TAA (render.aa = TAA) for a clean result; noisy without it.", CVarFlags::Persist};
+	CVar<int> AoMode{"render.ao.mode", 0, "Ambient-occlusion technique (#151): 0 = Off, 1 = SSAO (screen-space hemisphere kernel + bilateral blur, any GPU), 2 = RT (hardware ray query, requires an RT GPU; falls back to Off on a non-RT device). Both write the same forward AO slot for a clean same-scene A/B. Replaces the old render.ao.rt bool (#118). RT mode traces a few rays/frame and needs TAA (render.aa = TAA) for a clean result; SSAO is temporally stable on its own.", CVarFlags::Persist};
 
 	CVar<float> AORadius{"render.ao.radius", 0.5f, "RTAO occlusion sample distance in world units (larger = broader, softer occlusion)", CVarFlags::Persist};
 
@@ -144,7 +159,7 @@ namespace Snowstorm::CVars
 
 	CVar<float> AODenoiseHitDist{"render.ao.denoise.hitdist", 0.0f, "RTAO hit-distance edge-stop phi (#130 Inc B, NRD REBLUR-style): weights à-trous taps by |Δ normalized hit distance| so a near contact-shadow gradient isn't blurred into distant AO. DEFAULT 0 (OFF): the hit distance rides the RAW few-ray trace's .a, which is far too noisy between neighbours at ~2 rays/pixel — a non-zero phi then rejects every tap and the à-trous becomes a no-op. Only useful once the hit distance is temporally accumulated / denoised (see follow-up). ~4-16 once a clean hitT exists.", CVarFlags::Persist};
 
-	CVar<bool> ReflectionsRT{"render.reflections.rt", false, "Ray-traced reflections (#118): trace a reflection ray inline in DefaultLit, shade the reflected hit (albedo + sun + ambient), and blend it into the specular term for smooth surfaces. Requires an RT GPU (ignored otherwise). One ray/pixel — needs TAA (render.aa = TAA) for a clean result.", CVarFlags::Persist};
+	CVar<int> ReflectionsMode{"render.reflections.mode", 0, "Reflection technique (#151): 0 = Off, 1 = SSR (screen-space depth-buffer ray march reflecting the previous frame's color, any GPU), 2 = RT (hardware ray query that re-shades the hit, requires an RT GPU; falls back to Off on a non-RT device). Both write the same forward reflection slot for a clean same-scene A/B. Replaces the old render.reflections.rt bool (#118). Needs TAA (render.aa = TAA) for a clean result either way.", CVarFlags::Persist};
 
 	CVar<float> ReflectionIntensity{"render.reflections.intensity", 1.0f, "Multiplier on the RT reflection contribution (1 = physical, 0 = none)", CVarFlags::Persist};
 
@@ -216,6 +231,37 @@ namespace Snowstorm::CVars
 			return 1.0f;
 		}
 		return s;
+	}
+
+	uint32_t MsaaSampleCount()
+	{
+		// LIVE: read render.msaa each call, snapped to the largest of {1,2,4,8} that is <= the request AND <=
+		// the device's color+depth max. The MSAA toggle applies live — ViewportResizeSystem reallocates the
+		// scene targets and rebuilds the material/sky pipelines in place when this value changes — so this must
+		// track the CVar, not cache it. Only the device max (constant) is cached, to avoid a per-call
+		// vkGetPhysicalDeviceProperties; cheap enough for the several per-frame consumers.
+		static const uint32_t s_DeviceMax = Renderer::GetMaxSampleCount(); // 1/2/4/8, color+depth intersection
+		const int requested = Msaa.Get();
+		uint32_t resolved = 1;
+		for (const uint32_t c : {8u, 4u, 2u})
+		{
+			if (requested >= static_cast<int>(c) && s_DeviceMax >= c)
+			{
+				resolved = c;
+				break;
+			}
+		}
+		return resolved;
+	}
+
+	bool DlaaActive()
+	{
+		return AAMode.Get() == 3;
+	}
+
+	uint32_t ClampedGtSsaa()
+	{
+		return GtSsaa.Get() >= 2 ? 2u : 1u; // {1,2}; only 2x supported for now (a bilinear tap = exact 2x box)
 	}
 
 	float ClampedGIScale()
@@ -375,20 +421,46 @@ namespace Snowstorm::CVars
 		return ShadowsMode.Get() == 2 && Renderer::IsRayTracingSupported();
 	}
 
+	bool AoSSAOActive()
+	{
+		// render.ao.mode == SSAO. Screen-space, so no device-support check — runs on any GPU (#151).
+		return AoMode.Get() == 1;
+	}
+
 	bool AoRTActive()
 	{
-		// render.ao.rt on AND an RT-capable device (where the SS_RAYTRACING permutation exists). Mirrors
+		// render.ao.mode == RT AND an RT-capable device (where the SS_RAYTRACING permutation exists). Mirrors
 		// ShadowsRTActive: on a non-RT GPU the RTAO shader branch is compiled out, so this stays false and
-		// RTAO is a no-op. Also drives the TLAS build gate (TlasBuildSystem).
-		return AoRT.Get() && Renderer::IsRayTracingSupported();
+		// mode 2 degrades to Off. Also drives the TLAS build gate (TlasBuildSystem) + the RT SVGF chain.
+		return AoMode.Get() == 2 && Renderer::IsRayTracingSupported();
+	}
+
+	bool AoActive()
+	{
+		// Either technique is live. The shared tail (bilateral upsample + forward AO consumption + the
+		// depth+normal prepass) gates on this so SSAO and RT AO converge on the same forward slot (#151).
+		return AoSSAOActive() || AoRTActive();
+	}
+
+	bool ReflectionsSSRActive()
+	{
+		// render.reflections.mode == SSR. Screen-space, so no device-support check — runs on any GPU (#151).
+		return ReflectionsMode.Get() == 1;
 	}
 
 	bool ReflectionsRTActive()
 	{
-		// render.reflections.rt on AND an RT-capable device. Mirrors AoRTActive; on a non-RT GPU the
-		// reflection shader branch is compiled out so this stays false. Drives the TLAS build gate AND the
-		// per-instance geometry-table build (both only needed when reflections actually trace).
-		return ReflectionsRT.Get() && Renderer::IsRayTracingSupported();
+		// render.reflections.mode == RT AND an RT-capable device. Mirrors AoRTActive; on a non-RT GPU the
+		// reflection shader branch is compiled out so this stays false (mode 2 degrades to Off). Drives the TLAS
+		// build gate AND the per-instance geometry-table build (both only needed when reflections actually trace).
+		return ReflectionsMode.Get() == 2 && Renderer::IsRayTracingSupported();
+	}
+
+	bool ReflectionsActive()
+	{
+		// Either technique is live. The shared tail (reflection temporal + denoise + forward consumption + the
+		// depth+normal prepass) gates on this so SSR and RT converge on the same forward slot (#151).
+		return ReflectionsSSRActive() || ReflectionsRTActive();
 	}
 
 	bool ReflectionTemporalActive()
@@ -402,6 +474,53 @@ namespace Snowstorm::CVars
 		// branch is compiled out so this stays false. Drives the TLAS build gate AND the geometry-table build
 		// (GI shades its hits through the same table reflections use).
 		return GIRT.Get() && Renderer::IsRayTracingSupported();
+	}
+
+	CVar<bool> PathTrace{"render.pathtrace", false, "Reference path tracer (#153): a brute-force ground-truth render mode (GGX+Lambert BSDF, sun next-event estimation, sky environment, multi-bounce, Russian roulette) that progressively accumulates while the camera is static. NOT real-time — the correctness anchor for the thesis A/B. When on it replaces the raster/RT scene path. Requires an RT GPU.", CVarFlags::Persist};
+
+	CVar<int> PathTraceSpp{"render.pathtrace.spp", 2, "Reference path tracer paths per pixel PER FRAME (progressive: total = this x frames since the camera last moved). Higher = faster convergence, lower interactivity. Clamped to [1, 64].", CVarFlags::Persist};
+
+	CVar<int> PathTraceBounces{"render.pathtrace.bounces", 8, "Reference path tracer max path length (bounces). Russian roulette terminates paths after bounce 3 regardless. Clamped to [1, 32].", CVarFlags::Persist};
+
+	CVar<float> PathTraceClamp{"render.pathtrace.clamp", 16.0f, "Reference path tracer per-sample radiance firefly clamp (world units): caps each path sample so a rare very-bright path (specular NEE / caustic-ish indirect spike) can't leave a slow-to-average dot. Trades a little bias in genuine bright highlights for far cleaner convergence. 0 = unbounded (unbiased but noisy). ~8-32 typical.", CVarFlags::Persist};
+
+	CVar<float> PathTraceWeightClamp{"render.pathtrace.weightclamp", 8.0f, "Reference path tracer path regularization: max per-bounce BSDF sample weight (throughput multiplier). A near-mirror indirect bounce at a grazing/low-pdf direction makes BSDF/pdf blow up into a fixed hot pixel that never converges; clamping the weight bounds it without blurring reflections. Small bias on rare high-weight paths. 0 = off (unbiased ground truth); ~4-16 for a clean interactive preview. Set 0 for final reference captures.", CVarFlags::Persist};
+
+	CVar<bool> PathTraceEnvNee{"render.pathtrace.envnee", true, "Reference path tracer environment (sky) next-event estimation with MIS: each hit samples the analytic sky directly (a shadow ray) and MIS-combines it with the BSDF-continuation sky hit, cutting sky-lit variance (especially on glossy surfaces). Unbiased (the converged image is unchanged; only convergence speed differs). Off = sky arrives only via continuation rays (the pre-NEE integrator). Mainly a dev/A-B knob.", CVarFlags::Persist};
+
+	int ClampedPathTraceSpp()
+	{
+		const int n = PathTraceSpp.Get();
+		if (n < 1)
+		{
+			return 1;
+		}
+		if (n > 64)
+		{
+			return 64;
+		}
+		return n;
+	}
+
+	int ClampedPathTraceBounces()
+	{
+		const int n = PathTraceBounces.Get();
+		if (n < 1)
+		{
+			return 1;
+		}
+		if (n > 32)
+		{
+			return 32;
+		}
+		return n;
+	}
+
+	bool PathTraceActive()
+	{
+		// render.pathtrace on AND an RT-capable device (RayQuery). On a non-RT GPU the PT shader permutation
+		// doesn't exist, so this stays false and the mode is a no-op (falls back to the normal scene path).
+		return PathTrace.Get() && Renderer::IsRayTracingSupported();
 	}
 
 	bool AnyRTEffectActive()

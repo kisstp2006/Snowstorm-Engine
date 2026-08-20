@@ -113,9 +113,19 @@ namespace Snowstorm
 		// DepthNormalEffect renders the G-buffer when set; the GI pass + bilateral upsample consume it.
 		bool GBufferNeeded = false;
 
+		// Assets still streaming this frame (#153): while true the path tracer keeps RESETTING its accumulation,
+		// so the magenta placeholder frames (unresolved textures/meshes) never bake into the converged mean. Set
+		// in the RenderSystem preamble from AssetManagerSingleton::PendingLoadCount().
+		bool PathTraceSceneSettling = false;
+
 		// Whether TAA (render.aa == 2) is active with valid history targets. TemporalEffect resolves when
 		// set, and clears the per-viewport history-valid flag when NOT set (so re-enabling starts clean).
 		bool TaaOn = false;
+
+		// Whether DLAA (render.aa == 3) is active: the neural TEMPORAL network runs at NATIVE res as the
+		// temporal resolve, replacing classical TAA. Mutually exclusive with TaaOn (both keyed off render.aa).
+		// UpscaleEffect runs the neural pass when set (even at scale==1); jitter + velocity turn on like TAA.
+		bool Dlaa = false;
 
 		// LDR post-chain sizing, derived once in the RenderViewport preamble (they depend only on CVars +
 		// the viewport's targets): the tonemap destination (stage 0 of the ping-pong), the full present

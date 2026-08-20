@@ -19,19 +19,27 @@
 #include "Snowstorm/Render/Passes/DatasetExportPass.hpp"
 #include "Snowstorm/Render/Passes/CameraDepthPrepass.hpp"
 #include "Snowstorm/Render/Passes/DepthNormalPass.hpp"
+#include "Snowstorm/Render/Passes/PathTracePass.hpp" // #153: reference path tracer
 #include "Snowstorm/Render/RendererUtils.hpp"
+
+#include <unordered_map> // #153: per-viewport path-trace accumulation state
 #include "Snowstorm/Render/Passes/FxaaPass.hpp"
 #include "Snowstorm/Render/Passes/AOPass.hpp"
-#include "Snowstorm/Render/Denoiser.hpp" // #132: shared SVGF processor (owns the GITemporal/GIDenoise passes)
+#include "Snowstorm/Render/Passes/SSAOPass.hpp"     // #151: screen-space AO trace
+#include "Snowstorm/Render/Passes/SSAOBlurPass.hpp" // #151: SSAO depth+normal bilateral blur
+#include "Snowstorm/Render/Denoiser.hpp"            // #132: shared SVGF processor (owns the GITemporal/GIDenoise passes)
 #include "Snowstorm/Render/Passes/GIPass.hpp"
 #include "Snowstorm/Render/Passes/ReflectionPass.hpp"
+#include "Snowstorm/Render/Passes/SSRPass.hpp" // #151: screen-space reflection trace
 #include "Snowstorm/Render/Passes/AOUpsamplePass.hpp"
 #include "Snowstorm/Render/Passes/GIUpsamplePass.hpp"
 #include "Snowstorm/Render/Passes/MetricsPass.hpp"
+#include "Snowstorm/Render/Passes/QualityCapturePass.hpp" // #153: headless FLIP/PSNR/SSIM capture
 #include "Snowstorm/Render/Passes/NeuralUpscalePass.hpp"
 #include "Snowstorm/Render/Passes/SharpenPass.hpp"
 #include "Snowstorm/Render/Passes/TemporalResolvePass.hpp"
 #include "Snowstorm/Render/Passes/UpscalePass.hpp"
+#include "Snowstorm/Render/Renderer.hpp" // Renderer::WaitIdle when recreating the lazy SSAA GT target
 #include "Snowstorm/Render/Passes/VelocityPass.hpp"
 
 // Concrete per-viewport effects (#120) + RenderSystem::BuildViewportEffects. Each effect owns its stage's
@@ -43,6 +51,114 @@ namespace Snowstorm
 {
 	namespace
 	{
+		// Reference path tracer (#153): the ground-truth render MODE. When render.pathtrace is on it runs FIRST
+		// and OWNS the frame — path-traces into the persistent fp32 accumulation buffer (progressive running
+		// mean, reset when the camera or scene moves) and publishes that buffer as the scene color; the normal
+		// scene path (G-buffer/GI/AO/reflections/forward/upscale/TAA) is skipped (their gates fold in
+		// !PathTraceActive()). The LDR chain then tonemaps the accumulated HDR result. Uses the UNJITTERED camera
+		// VP (its own per-sample sub-pixel jitter is the AA), so TAA-style jitter can't reset accumulation every
+		// frame. Needs the TLAS + geometry table (TlasBuildSystem gates PT in).
+		class PathTraceEffect final : public IViewportEffect
+		{
+		public:
+			explicit PathTraceEffect(RenderSystem& owner)
+			    : m_Owner(owner)
+			{
+			}
+
+			[[nodiscard]] const char* Name() const override { return "PathTrace"; }
+
+			[[nodiscard]] bool ShouldRun(const ViewportRenderContext& v) const override
+			{
+				return CVars::PathTraceActive() && v.RT.PathTraceAccumTarget && v.RT.PathTraceAccumView;
+			}
+
+			// A scene wipe invalidates the accumulated radiance (new geometry) — drop it so the next frame restarts.
+			void OnSceneCut() override { m_State.clear(); }
+
+			void Contribute(ViewportRenderContext& v) override
+			{
+				FrameContext& fc = v.Frame;
+				const Ref<TextureView> accumView = v.RT.PathTraceAccumView;
+				const auto& accumDesc = v.RT.PathTraceAccumTarget->GetDesc();
+				const uint32_t w = accumDesc.Width;
+				const uint32_t h = accumDesc.Height;
+
+				// UNJITTERED VP for both primary-ray reconstruction and reset detection: the PT owns AA via its
+				// own per-sample jitter, so using the jittered VP would (a) double-jitter and (b) change the VP
+				// every frame -> reset accumulation every frame -> it would never converge.
+				const glm::mat4 vp = v.Cam.Rt->ViewProjection;
+				State& st = m_State[v.ViewportEntity];
+				// Restart the running mean on any camera change, OR while assets are still streaming (so the
+				// magenta placeholder frames don't contaminate the converged image, #153).
+				const uint32_t envNee = CVars::PathTraceEnvNee.Get() ? 1u : 0u;
+				// Toggling env-NEE resets the running mean: the two modes have different intermediate means, so
+				// blending them mid-accumulation would corrupt the A/B (they converge to the same image but must
+				// not be averaged together).
+				const bool moved = (st.LastVP != vp) || v.PathTraceSceneSettling || (st.EnvNee != envNee);
+				const uint32_t spp = static_cast<uint32_t>(CVars::ClampedPathTraceSpp());
+				const uint32_t base = moved ? 0u : st.Samples;
+
+				const FrameData& fd = fc.Renderer.GetFrameData();
+				PathTracePass::Params p{};
+				p.InvViewProj = glm::inverse(vp);
+				p.CameraPosition = v.Cam.Transform->Position;
+				// Sun as a finite disk: cos of its angular RADIUS (render.shadow.sun_angle_deg is the DIAMETER),
+				// so the reflected sun on smooth floors converges to a soft highlight instead of a hot delta dot.
+				p.SunCosThetaMax = glm::cos(glm::radians(0.5f * CVars::ShadowSunAngleDeg.Get()));
+				p.OutSize = {w, h};
+				p.BaseSampleCount = base;
+				p.SamplesPerFrame = spp;
+				p.MaxBounces = static_cast<uint32_t>(CVars::ClampedPathTraceBounces());
+				p.Reset = moved ? 1u : 0u;
+				p.LightCount = static_cast<uint32_t>(fd.Lights.LightCount);
+				if (fd.Lights.LightCount > 0)
+				{
+					p.SunDirection = fd.Lights.Lights[0].Direction;
+					p.SunIntensity = fd.Lights.Lights[0].Intensity;
+					p.SunColor = fd.Lights.Lights[0].Color;
+				}
+				p.ShadowStrength = CVars::ShadowStrength.Get();
+				p.LightSourceRadius = CVars::ShadowSourceRadius.Get(); // finite point/spot size (soft highlights, no delta dots)
+				p.FireflyClamp = CVars::PathTraceClamp.Get();
+				p.MaxBounceWeight = CVars::PathTraceWeightClamp.Get(); // path regularization (kills indirect throughput spikes)
+				p.EnvNee = envNee;                                     // environment (sky) NEE + MIS (render.pathtrace.envnee)
+				p.SkyZenithColor = fd.Environment.SkyZenithColor;
+				p.SkyHorizonColor = fd.Environment.SkyHorizonColor;
+				p.GroundColor = fd.Environment.GroundColor;
+				p.TableAddress = fc.Renderer.GetReflectionGeometryAddress();
+				p.FrameCounter = static_cast<uint32_t>(fc.Renderer.GetFrameCounter());
+
+				fc.Graph.AddPass({.Name = "PathTrace" + v.Suffix,
+				                  .IsCompute = true,
+				                  .Writes = {{accumView->GetTexture(), RenderGraph::AccessState::Storage}},
+				                  .Execute = [this, &fc, p, accumView](CommandContext&)
+				                  { m_Pass.Dispatch(fc.Ctx, fc.FrameIndex, p, fc.Renderer.GetFrameData().Lights, accumView); }});
+
+				st.LastVP = vp;
+				st.EnvNee = envNee;
+				st.Samples = base + spp;
+
+				// Publish the accumulated HDR buffer as THE scene color; the LDR chain tonemaps it (the tonemap
+				// declares it as a Sampled read, so the graph inserts the Storage -> Sampled barrier). Target is
+				// null (a compute output, like the neural upscaler's).
+				v.SceneColor.Target = nullptr;
+				v.SceneColor.View = accumView;
+				v.SceneColor.Texture = accumView->GetTexture();
+			}
+
+		private:
+			RenderSystem& m_Owner;
+			PathTracePass m_Pass; // owned here: the PT compute pass is exclusive to this effect
+			struct State
+			{
+				glm::mat4 LastVP{0.0f};
+				uint32_t Samples = 0;
+				uint32_t EnvNee = 1; // last-used env-NEE toggle; a change restarts accumulation
+			};
+			std::unordered_map<entt::entity, State> m_State; // per-viewport accumulated sample count + last VP
+		};
+
 		// Depth+normal prepass (#124): re-renders visible meshes into the partial G-buffer (world normal
 		// color + sampled depth) BEFORE the forward pass, so the half-res RT GI compute pass has a per-pixel
 		// world-position (from depth) + world-normal source, and the bilateral upsample has an edge guide.
@@ -341,11 +457,99 @@ namespace Snowstorm
 			GIUpsamplePass m_Pass; // owned here: exclusive to this effect
 		};
 
-		// Half-res RT AO compute pass (#126) — the AO analogue of GIEffect, a strict subset (occupancy-only,
-		// no geometry table). Traces the occlusion hemisphere at render.ao.scale over the depth+normal
-		// G-buffer, writing a scalar occlusion factor into AOTarget. Runs after the GI sub-chain, before
-		// Forward. Gated on AoRTActive() alone — AO needs no geometry table (unlike GI). Independent of GI:
-		// AO can run with GI off. Debug view 2 shows the raw output.
+		// Screen-space AO technique (#151), the raster baseline the thesis compares RT AO against. Runs only in
+		// render.ao.mode == SSAO. Reads the SAME depth+normal G-buffer as the RT path and writes the SAME half-res
+		// AOTarget, then a depth+normal bilateral blur into AOBlurTarget (v.AOView) — so the shared bilateral
+		// upsample + forward consumption downstream are agnostic to which technique produced the AO. NO temporal /
+		// SVGF: SSAO uses a frame-static kernel + this spatial blur, so it's stable without a velocity pass. Debug
+		// view 2 shows the raw AOTarget (the un-blurred trace), same as RT.
+		class SSAOEffect final : public IViewportEffect
+		{
+		public:
+			explicit SSAOEffect(RenderSystem& owner)
+			    : m_Owner(owner)
+			{
+			}
+
+			[[nodiscard]] const char* Name() const override { return "SSAO"; }
+
+			[[nodiscard]] bool ShouldRun(const ViewportRenderContext& v) const override
+			{
+				return v.GBufferNeeded && CVars::AoSSAOActive() && v.RT.AOTarget && v.RT.AOTargetView &&
+				       v.RT.AOBlurTarget && v.RT.AOBlurTargetView;
+			}
+
+			void Contribute(ViewportRenderContext& v) override
+			{
+				FrameContext& fc = v.Frame;
+
+				const auto& gbufDesc = v.RT.GBufferNormalTarget->GetDesc();
+				const uint32_t fullW = gbufDesc.Width;
+				const uint32_t fullH = gbufDesc.Height;
+				const float scale = CVars::ClampedAOScale();
+				const uint32_t aoW = ScaledExtent(fullW, scale);
+				const uint32_t aoH = ScaledExtent(fullH, scale);
+
+				const Ref<TextureView> gbufView = gbufDesc.ColorAttachments[0].View;
+				const Ref<TextureView> depthView = gbufDesc.DepthAttachment->View; // fp32 D32 depth
+				const Ref<TextureView> aoView = v.RT.AOTargetView;                 // raw SSAO trace (debug view 2)
+				const Ref<TextureView> blurView = v.RT.AOBlurTargetView;           // bilateral-blurred result (v.AOView)
+
+				// Reconstruct from / project with THIS frame's jittered camera VP — the matrix the jittered
+				// DepthNormal prepass wrote the depth with. GetFrameData().ViewProjection at graph-build time still
+				// holds the PREVIOUS frame's forward matrix (BeginScene runs at execute, after this), which would
+				// mismatch this frame's depth and warp reconstructed positions. Same fix as the RT AO/GI/reflection
+				// effects (#133 follow-up).
+				const glm::mat4 viewProj = v.Cam.Rt->JitteredViewProjection;
+				const glm::mat4 invViewProj = glm::inverse(viewProj);
+				const float radius = CVars::AORadius.Get();
+				const float intensity = CVars::AOIntensity.Get();
+				const float nearPlane = v.Cam.Cam ? v.Cam.Cam->PerspectiveNear : 0.1f;
+				const float farPlane = v.Cam.Cam ? v.Cam.Cam->PerspectiveFar : 500.0f;
+				const float bias = 0.025f; // view-depth self-occlusion bias (world units); fixed baseline
+				const float depthSigma = CVars::DepthEdgeSigma.Get();
+
+				// Trace: reads the G-buffer + depth (Sampled), writes the raw AO (Storage).
+				fc.Graph.AddPass({.Name = "SSAO" + v.Suffix,
+				                  .IsCompute = true,
+				                  .Reads = {{gbufView->GetTexture(), RenderGraph::AccessState::Sampled},
+				                            {depthView->GetTexture(), RenderGraph::AccessState::Sampled}},
+				                  .Writes = {{aoView->GetTexture(), RenderGraph::AccessState::Storage}},
+				                  .Execute = [this, &fc, invViewProj, viewProj, radius, intensity, nearPlane, farPlane, bias, gbufView, depthView, aoView, aoW, aoH](CommandContext& c)
+				                  {
+					                  m_Trace.Dispatch(fc.Ctx, fc.FrameIndex, invViewProj, viewProj, radius, intensity,
+					                                   nearPlane, farPlane, bias, gbufView, depthView, aoView, aoW, aoH);
+				                  }});
+
+				// Bilateral blur: reads the raw AO + G-buffer guide (Sampled), writes the blurred AO (Storage).
+				fc.Graph.AddPass({.Name = "SSAOBlur" + v.Suffix,
+				                  .IsCompute = true,
+				                  .Reads = {{aoView->GetTexture(), RenderGraph::AccessState::Sampled},
+				                            {gbufView->GetTexture(), RenderGraph::AccessState::Sampled},
+				                            {depthView->GetTexture(), RenderGraph::AccessState::Sampled}},
+				                  .Writes = {{blurView->GetTexture(), RenderGraph::AccessState::Storage}},
+				                  .Execute = [this, &fc, aoView, gbufView, depthView, blurView, aoW, aoH, nearPlane, farPlane, depthSigma](CommandContext& c)
+				                  {
+					                  m_Blur.Dispatch(fc.Ctx, fc.FrameIndex, aoView, gbufView, depthView, blurView, aoW, aoH,
+					                                  nearPlane, farPlane, depthSigma);
+				                  }});
+
+				v.AOView = blurView; // the blurred buffer is the live AO the shared upsample reads
+			}
+
+		private:
+			RenderSystem& m_Owner;
+			SSAOPass m_Trace;    // owned here: the SSAO trace is exclusive to this effect
+			SSAOBlurPass m_Blur; // owned here: the SSAO bilateral blur is exclusive to this effect
+		};
+
+		// Half-res RT AO compute pass (#126), the AO analogue of GIEffect. Occupancy-only (no sun/IBL shading),
+		// but it reads the per-instance geometry table to alpha-test cutout occluders in the any-hit path, so
+		// foliage doesn't over-occlude through transparent texels. Traces the occlusion hemisphere at
+		// render.ao.scale over the depth+normal G-buffer, writing a scalar occlusion factor into AOTarget. Runs
+		// after the GI sub-chain, before Forward. Gated on AoRTActive() alone (AO runs even if the table isn't
+		// published yet, falling back to solid occluders). Independent of GI: AO can run with GI off. Debug
+		// view 2 shows the raw output.
 		class AOEffect final : public IViewportEffect
 		{
 		public:
@@ -385,16 +589,19 @@ namespace Snowstorm
 				const float intensity = CVars::AOIntensity.Get();
 				const auto frameCounter = static_cast<uint32_t>(fc.Renderer.GetFrameCounter());
 				const auto rayCount = static_cast<uint32_t>(CVars::ClampedAORayCount());
+				// Geometry-table address for the cutout any-hit test (0 = not published yet -> occluders solid).
+				// AO still runs regardless, so ShouldRun stays gated on AoRTActive() alone (no table dependency).
+				const uint64_t tableAddr = fc.Renderer.GetReflectionGeometryAddress();
 
 				fc.Graph.AddPass({.Name = "AO" + v.Suffix,
 				                  .IsCompute = true,
 				                  .Reads = {{gbufView->GetTexture(), RenderGraph::AccessState::Sampled},
 				                            {depthView->GetTexture(), RenderGraph::AccessState::Sampled}},
 				                  .Writes = {{aoView->GetTexture(), RenderGraph::AccessState::Storage}},
-				                  .Execute = [this, &fc, invViewProj, radius, intensity, frameCounter, rayCount, gbufView, depthView, aoView, aoW, aoH](CommandContext& c)
+				                  .Execute = [this, &fc, invViewProj, radius, intensity, frameCounter, rayCount, tableAddr, gbufView, depthView, aoView, aoW, aoH](CommandContext& c)
 				                  {
 					                  m_Pass.Dispatch(fc.Ctx, fc.FrameIndex, invViewProj, radius, intensity, frameCounter,
-					                                  rayCount, gbufView, depthView, aoView, aoW, aoH);
+					                                  rayCount, tableAddr, gbufView, depthView, aoView, aoW, aoH);
 				                  }});
 
 				v.AOView = aoView; // the raw trace is the live AO buffer; temporal/denoise republish downstream (#130)
@@ -516,7 +723,9 @@ namespace Snowstorm
 
 			[[nodiscard]] bool ShouldRun(const ViewportRenderContext& v) const override
 			{
-				return v.GBufferNeeded && CVars::AoRTActive() && v.RT.AOTarget && v.AOView &&
+				// AoActive(): the shared upsample serves BOTH techniques (SSAO or RT) — v.AOView is whatever the
+				// active AO sub-chain last wrote (SSAO's blur, or the RT trace/temporal/denoise), #151.
+				return v.GBufferNeeded && CVars::AoActive() && v.RT.AOTarget && v.AOView &&
 				       v.RT.AOUpscaleTarget && !v.RT.AOUpscaleTarget->GetDesc().ColorAttachments.empty();
 			}
 
@@ -551,6 +760,78 @@ namespace Snowstorm
 		private:
 			RenderSystem& m_Owner;
 			AOUpsamplePass m_Pass; // owned here: exclusive to this effect
+		};
+
+		// Screen-space reflection technique (#151), the raster baseline the thesis compares RT reflections
+		// against. Runs only in render.reflections.mode == SSR. Reads the SAME depth+shading-normal G-buffer and
+		// writes the SAME full-res ReflectionTarget as the RT path, then flows through the SAME reflection
+		// temporal/denoise/forward tail — so the only variable in the A/B is the reflection SOURCE (screen march
+		// vs ray trace). Marches the depth buffer; a hit reflects the PREVIOUS frame's scene color (reprojected by
+		// velocity, snapshotted by PrevColorSnapshotEffect), a miss reflects the prefiltered env cube. Needs the
+		// velocity buffer (reprojection) + the prev-color history, so it forces the velocity pass on (see the
+		// RenderSystem preamble / VelocityEffect gate). Debug view 3 shows the raw ReflectionTarget, same as RT.
+		class SSREffect final : public IViewportEffect
+		{
+		public:
+			explicit SSREffect(RenderSystem& owner)
+			    : m_Owner(owner)
+			{
+			}
+
+			[[nodiscard]] const char* Name() const override { return "SSR"; }
+
+			[[nodiscard]] bool ShouldRun(const ViewportRenderContext& v) const override
+			{
+				return v.GBufferNeeded && CVars::ReflectionsSSRActive() && v.RT.ReflectionTarget && v.RT.ReflectionTargetView &&
+				       v.RT.PrevSceneColorTarget && !v.RT.PrevSceneColorTarget->GetDesc().ColorAttachments.empty() &&
+				       v.Velocity && v.RT.GBufferNormalTarget->GetDesc().ColorAttachments.size() > 1;
+			}
+
+			void Contribute(ViewportRenderContext& v) override
+			{
+				FrameContext& fc = v.Frame;
+
+				const auto& reflDesc = v.RT.ReflectionTarget->GetDesc();
+				const uint32_t reflW = reflDesc.Width;
+				const uint32_t reflH = reflDesc.Height;
+				const auto& gbufDesc = v.RT.GBufferNormalTarget->GetDesc();
+				const Ref<TextureView> shadingView = gbufDesc.ColorAttachments[1].View; // #129 Inc 1c: shading normal
+				const Ref<TextureView> depthView = gbufDesc.DepthAttachment->View;      // fp32 D32 depth
+				const Ref<TextureView> reflView = v.RT.ReflectionTargetView;
+				const Ref<TextureView> prevColorView = v.RT.PrevSceneColorTarget->GetDesc().ColorAttachments[0].View;
+				const Ref<TextureView> velocityView = v.Velocity;
+
+				// THIS frame's jittered camera VP (matches the jittered DepthNormal G-buffer + forward), not the
+				// stale GetFrameData().ViewProjection — same fix as GI/AO/RT-reflection (#133 follow-up).
+				const glm::mat4 viewProj = v.Cam.Rt->JitteredViewProjection;
+				const glm::vec3 camPos = v.Cam.Transform->Position;
+				const float reflRange = CVars::ReflectionRange.Get();
+				const float nearPlane = v.Cam.Cam ? v.Cam.Cam->PerspectiveNear : 0.1f;
+				const float farPlane = v.Cam.Cam ? v.Cam.Cam->PerspectiveFar : 500.0f;
+				// Prefiltered env cube for the reflection miss. The bindless index is stable frame-to-frame (unlike
+				// the camera VP), so the graph-build-time GetFrameData() is fine here.
+				const uint32_t prefilteredCubeIndex = fc.Renderer.GetFrameData().IBL.PrefilteredCubeIndex;
+
+				fc.Graph.AddPass({.Name = "SSR" + v.Suffix,
+				                  .IsCompute = true,
+				                  .Reads = {{shadingView->GetTexture(), RenderGraph::AccessState::Sampled},
+				                            {depthView->GetTexture(), RenderGraph::AccessState::Sampled},
+				                            {prevColorView->GetTexture(), RenderGraph::AccessState::Sampled},
+				                            {velocityView->GetTexture(), RenderGraph::AccessState::Sampled}},
+				                  .Writes = {{reflView->GetTexture(), RenderGraph::AccessState::Storage}},
+				                  .Execute = [this, &fc, viewProj, camPos, reflRange, nearPlane, farPlane, prefilteredCubeIndex, shadingView, depthView, prevColorView, velocityView, reflView, reflW, reflH](CommandContext& c)
+				                  {
+					                  m_Pass.Dispatch(fc.Ctx, fc.FrameIndex, viewProj, camPos, reflRange, nearPlane, farPlane,
+					                                  prefilteredCubeIndex, shadingView, depthView, prevColorView, velocityView,
+					                                  reflView, reflW, reflH);
+				                  }});
+
+				v.ReflectionView = reflView; // the raw SSR trace is the live reflection; temporal/denoise republish downstream
+			}
+
+		private:
+			RenderSystem& m_Owner;
+			SSRPass m_Pass; // owned here: the SSR compute pass is exclusive to this effect
 		};
 
 		// Full-res RT reflection compute pass (#129): the reflection analogue of GIEffect, lifting the inline
@@ -637,9 +918,10 @@ namespace Snowstorm
 
 			[[nodiscard]] bool ShouldRun(const ViewportRenderContext& v) const override
 			{
-				return v.GBufferNeeded && CVars::ReflectionsRTActive() && v.ReflectionView &&
-				       v.RT.ReflectionDenoiser.Allocated() &&
-				       v.Frame.Renderer.GetReflectionGeometryAddress() != 0;
+				// ReflectionsActive(): serves BOTH SSR and RT. v.ReflectionView being set already implies the
+				// source pass ran (SSR, or RT which self-gates on the geometry table), so no table check here (#151).
+				return v.GBufferNeeded && CVars::ReflectionsActive() && v.ReflectionView &&
+				       v.RT.ReflectionDenoiser.Allocated();
 			}
 
 			void Contribute(ViewportRenderContext& v) override
@@ -686,9 +968,8 @@ namespace Snowstorm
 
 			[[nodiscard]] bool ShouldRun(const ViewportRenderContext& v) const override
 			{
-				return v.GBufferNeeded && CVars::ReflectionsRTActive() && CVars::ReflectionDenoiseActive() && v.ReflectionView &&
-				       v.RT.ReflectionDenoiser.Allocated() &&
-				       v.Frame.Renderer.GetReflectionGeometryAddress() != 0;
+				return v.GBufferNeeded && CVars::ReflectionsActive() && CVars::ReflectionDenoiseActive() && v.ReflectionView &&
+				       v.RT.ReflectionDenoiser.Allocated();
 			}
 
 			void Contribute(ViewportRenderContext& v) override
@@ -744,7 +1025,10 @@ namespace Snowstorm
 				// forces the velocity pass on whenever its effect is running — even without TAA / debug / neural.
 				const bool giTemporal = CVars::GIRTActive() && CVars::GITemporalActive();
 				const bool reflTemporal = CVars::ReflectionsRTActive() && CVars::ReflectionTemporalActive();
-				return (debugView == 1 || taaOn || neuralTemporal || exporting || giTemporal || reflTemporal) && v.RT.VelocityTarget &&
+				// SSR (#151) reprojects the previous-frame color by velocity every frame, so it needs the pass on
+				// unconditionally (not only when the reflection temporal stage is enabled).
+				const bool reflSSR = CVars::ReflectionsSSRActive();
+				return (debugView == 1 || taaOn || neuralTemporal || exporting || giTemporal || reflTemporal || reflSSR) && v.RT.VelocityTarget &&
 				       !v.RT.VelocityTarget->GetDesc().ColorAttachments.empty() &&
 				       v.RT.VelocityTarget->GetDesc().ColorAttachments[0].View;
 			}
@@ -804,7 +1088,9 @@ namespace Snowstorm
 			}
 
 			[[nodiscard]] const char* Name() const override { return "Forward"; }
-			[[nodiscard]] bool ShouldRun(const ViewportRenderContext&) const override { return true; }
+			// Skipped in path-trace mode: the reference PT produces the whole image, so the raster forward
+			// (and the G-buffer/GI/AO/reflection substrate, gated in the RenderSystem preamble) don't run (#153).
+			[[nodiscard]] bool ShouldRun(const ViewportRenderContext&) const override { return !CVars::PathTraceActive(); }
 
 			void Contribute(ViewportRenderContext& v) override
 			{
@@ -823,9 +1109,10 @@ namespace Snowstorm
 				}
 
 				// Half-res AO consumption (#126): mirror of the GI index above. 0 = no AO -> ao factor unchanged.
-				// Independent of GI (AO can run with GI off), needs no geometry table.
+				// AoActive() so BOTH SSAO and RT AO feed the same forward slot (#151). Independent of GI (AO can run
+				// with GI off), needs no geometry table.
 				uint32_t aoIndex = 0;
-				if (v.GBufferNeeded && CVars::AoRTActive() && v.RT.AOUpscaleTarget &&
+				if (v.GBufferNeeded && CVars::AoActive() && v.RT.AOUpscaleTarget &&
 				    !v.RT.AOUpscaleTarget->GetDesc().ColorAttachments.empty())
 				{
 					aoIndex = v.RT.AOUpscaleTarget->GetDesc().ColorAttachments[0].View->GetGlobalBindlessIndex();
@@ -837,8 +1124,7 @@ namespace Snowstorm
 				// pointer means this needs no change when the temporal stage is added.
 				uint32_t reflIndex = 0;
 				Ref<Texture> reflTexture;
-				if (v.GBufferNeeded && CVars::ReflectionsRTActive() && v.ReflectionView &&
-				    v.Frame.Renderer.GetReflectionGeometryAddress() != 0)
+				if (v.GBufferNeeded && CVars::ReflectionsActive() && v.ReflectionView)
 				{
 					reflIndex = v.ReflectionView->GetGlobalBindlessIndex();
 					reflTexture = v.ReflectionView->GetTexture(); // the live buffer, for the graph barrier
@@ -853,7 +1139,13 @@ namespace Snowstorm
 				const CameraPick& cam = v.Cam;
 				const auto& sceneDesc = v.RT.Target->GetDesc();
 				Ref<RenderTarget> forwardTarget = v.RT.Target;
-				if (sceneDesc.DepthAttachment.has_value() && !sceneDesc.ColorAttachments.empty())
+				// The early-Z prepass shares the scene depth with the forward. Under MSAA that depth is
+				// multisampled, which would require an MSAA depth-prepass pipeline too; for the first MSAA
+				// landing we instead skip early-Z when MSAA is on and let the forward clear + resolve its own
+				// multisampled target directly (v.RT.Target already carries the resolve). Tradeoff: MSAA loses
+				// the early-Z overdraw win (~2.5ms); restoring it (an MSAA prepass) is a clean later step.
+				const bool earlyZ = (CVars::MsaaSampleCount() == 1);
+				if (earlyZ && sceneDesc.DepthAttachment.has_value() && !sceneDesc.ColorAttachments.empty())
 				{
 					const Ref<TextureView> sceneColorView = sceneDesc.ColorAttachments[0].View;
 					const Ref<TextureView> sceneDepthView = sceneDesc.DepthAttachment->View;
@@ -896,12 +1188,13 @@ namespace Snowstorm
 
 				m_Owner.AddForwardPass(v.Frame, v.Cam, forwardTarget, "Forward" + v.Suffix, /*jittered*/ true,
 				                       /*forceRasterShadow*/ false, giIndex, aoIndex, reflIndex, reflTexture);
-				// Publish the HDR scene color for the downstream chain (upscale/TAA/tonemap).
+				// Publish the HDR scene color for the downstream chain (upscale/TAA/tonemap). Under MSAA this is
+				// the resolved single-sample image (GetSampleableColorView), never the multisampled attachment.
 				v.SceneColor.Target = v.RT.Target;
-				if (const auto& desc = v.RT.Target->GetDesc(); !desc.ColorAttachments.empty())
+				if (const Ref<TextureView> sampleable = v.RT.Target->GetSampleableColorView(0))
 				{
-					v.SceneColor.View = desc.ColorAttachments[0].View;
-					v.SceneColor.Texture = desc.ColorAttachments[0].View->GetTexture();
+					v.SceneColor.View = sampleable;
+					v.SceneColor.Texture = sampleable->GetTexture();
 				}
 			}
 
@@ -926,7 +1219,11 @@ namespace Snowstorm
 			[[nodiscard]] const char* Name() const override { return "Upscale"; }
 			[[nodiscard]] bool ShouldRun(const ViewportRenderContext& v) const override
 			{
-				return v.Upscaling && v.RT.SceneUpscaleTarget;
+				// Runs when actually upscaling (scale < 1) OR when DLAA is on (render.aa == 3): DLAA runs the
+				// neural temporal network at native res as the temporal resolve, so the effect fires even though
+				// there's no upscale. Both need SceneUpscaleTarget (always allocated full-res). Skipped in
+				// path-trace mode: PT is full-res and already resolved (#153).
+				return (v.Upscaling || v.Dlaa) && v.RT.SceneUpscaleTarget && !CVars::PathTraceActive();
 			}
 
 			void OnSceneCut() override { m_NeuralTemporalValid.clear(); }
@@ -942,7 +1239,7 @@ namespace Snowstorm
 					return;
 				}
 
-				const Ref<TextureView> lowResView = vpRT.Target->GetDesc().ColorAttachments[0].View;
+				const Ref<TextureView> lowResView = vpRT.Target->GetSampleableColorView(0); // resolved under MSAA
 				const Ref<TextureView> upView = upDesc.ColorAttachments[0].View;
 				const PixelFormat upFmt = upView->GetTexture()->GetDesc().Format;
 				const uint32_t upW = v.UpWidth;
@@ -958,10 +1255,15 @@ namespace Snowstorm
 				// 2 = neural temporal (LR + MV-warped previous neural output + motion vector). SetTemporal must
 				// precede PrepareResources.
 				const int upscalerMode = CVars::Upscaler.Get();
-				const bool wantTemporal = upscalerMode == 2;
+				// DLAA (render.aa == 3): force the neural TEMPORAL path (8-ch) regardless of render.upscaler — DLAA
+				// IS the neural temporal network run at native res as the AA resolve. At native the LR->out bilinear
+				// stage is an identity copy, so the network runs purely as the temporal resolve. Otherwise (scale<1)
+				// render.upscaler selects the path as before (1 = spatial, 2 = temporal).
+				const bool wantTemporal = v.Dlaa || upscalerMode == 2;
 				m_NeuralPass.SetTemporal(wantTemporal);
 				m_NeuralPass.SetWeightsPath(CVars::NeuralWeightsPath.Get());
-				const bool neural = (upscalerMode == 1 || upscalerMode == 2) && m_NeuralPass.PrepareResources(upW, upH);
+				const bool neuralModeOn = v.Dlaa || upscalerMode == 1 || upscalerMode == 2;
+				const bool neural = neuralModeOn && m_NeuralPass.PrepareResources(upW, upH);
 
 				// Temporal history = the pass's OWN previous-frame output. Its output ring is indexed by frame-in-
 				// flight (2 slots); with 2 frames in flight the OTHER slot holds the prior frame's neural result, so
@@ -1048,7 +1350,8 @@ namespace Snowstorm
 			[[nodiscard]] const char* Name() const override { return "TemporalResolve"; }
 			[[nodiscard]] bool ShouldRun(const ViewportRenderContext& v) const override
 			{
-				return v.TonemapTarget != nullptr; // the primary post-chain is active
+				// Skipped in path-trace mode: the PT image is already resolved (reprojecting it would be wrong).
+				return v.TonemapTarget != nullptr && !CVars::PathTraceActive();
 			}
 
 			void OnSceneCut() override { m_HistoryValid.clear(); }
@@ -1093,17 +1396,18 @@ namespace Snowstorm
 				const float nearPlane = v.Cam.Cam ? v.Cam.Cam->PerspectiveNear : 0.1f;
 				const float farPlane = v.Cam.Cam ? v.Cam.Cam->PerspectiveFar : 500.0f;
 				const float depthReject = CVars::TaaDepthReject.Get();
+				const bool depthRejectSlope = CVars::TaaDepthRejectSlope.Get();
 
 				fc.Graph.AddPass({.Name = "TemporalResolve" + v.Suffix,
 				                  .Target = curHistory,
 				                  .Reads = {{currentView->GetTexture(), RenderGraph::AccessState::Sampled},
 				                            {prevHistView->GetTexture(), RenderGraph::AccessState::Sampled},
 				                            {velView->GetTexture(), RenderGraph::AccessState::Sampled}},
-				                  .Execute = [this, &fc, currentView, prevHistView, velView, rcpFrame, historyValid, nearPlane, farPlane, depthReject, histFmt](CommandContext& c)
+				                  .Execute = [this, &fc, currentView, prevHistView, velView, rcpFrame, historyValid, nearPlane, farPlane, depthReject, depthRejectSlope, histFmt](CommandContext& c)
 				                  {
 					                  m_Pass.Draw(fc.Ctx, fc.FrameIndex, currentView, prevHistView, velView,
 					                              rcpFrame, historyValid, CVars::TaaBlend.Get(),
-					                              CVars::TaaMaxBlend.Get(), nearPlane, farPlane, depthReject, histFmt);
+					                              CVars::TaaMaxBlend.Get(), nearPlane, farPlane, depthReject, depthRejectSlope, histFmt);
 				                  }});
 
 				// Tonemap now reads the resolved history slot instead of the raw scene color.
@@ -1116,6 +1420,48 @@ namespace Snowstorm
 			// Per-viewport TAA history validity (#44): a viewport is valid once resolved at least once; erased
 			// when TAA turns off / resizes, and cleared wholesale on a scene cut (OnSceneCut).
 			std::unordered_set<entt::entity> m_HistoryValid;
+		};
+
+		// Previous-frame scene-color snapshot (#151, SSR): after the temporal resolve, copy the post-resolve HDR
+		// scene color into the persistent PrevSceneColorTarget, so NEXT frame's SSR can sample it as the reflected
+		// radiance on a screen-space hit (SSR is consumed before the current forward runs, so it can only reflect
+		// the previous frame's color — the standard forward-renderer SSR source). Runs only in SSR mode. Single-
+		// buffered: written late this frame, read early next frame; the one graphics queue + the read's barrier
+		// order it (like the TAA history). Reuses UpscalePass as a 1:1 HDR copy (src and dst are both full res).
+		class PrevColorSnapshotEffect final : public IViewportEffect
+		{
+		public:
+			explicit PrevColorSnapshotEffect(RenderSystem& owner)
+			    : m_Owner(owner)
+			{
+			}
+
+			[[nodiscard]] const char* Name() const override { return "PrevColorSnapshot"; }
+
+			[[nodiscard]] bool ShouldRun(const ViewportRenderContext& v) const override
+			{
+				return CVars::ReflectionsSSRActive() && v.SceneColor.View && v.SceneColor.Texture &&
+				       v.RT.PrevSceneColorTarget && !v.RT.PrevSceneColorTarget->GetDesc().ColorAttachments.empty();
+			}
+
+			void Contribute(ViewportRenderContext& v) override
+			{
+				FrameContext& fc = v.Frame;
+				const Ref<RenderTarget>& dst = v.RT.PrevSceneColorTarget;
+				const Ref<TextureView> srcView = v.SceneColor.View;
+				const Ref<Texture> srcTex = v.SceneColor.Texture;
+				const PixelFormat dstFmt = dst->GetDesc().ColorAttachments[0].View->GetTexture()->GetDesc().Format;
+
+				fc.Graph.AddPass({.Name = "PrevColorSnapshot" + v.Suffix,
+				                  .Target = dst,
+				                  .Reads = {{srcTex, RenderGraph::AccessState::Sampled}},
+				                  .Execute = [this, &fc, srcView, dstFmt](CommandContext& c)
+				                  { m_Copy.Draw(fc.Ctx, fc.FrameIndex, srcView, dstFmt); }});
+			}
+
+		private:
+			RenderSystem& m_Owner;
+			UpscalePass m_Copy; // reused as a 1:1 HDR fullscreen copy (#151); exclusive to this effect
 		};
 
 		// Tonemap + LDR post filters (#44): the tail of the primary path. Tonemaps the resolved scene color into
@@ -1236,13 +1582,75 @@ namespace Snowstorm
 					return;
 				}
 
+				// SSAA ground truth (DLAA #98): a single native GT frame is still aliased, so for a DLAA dataset
+				// the reference must be ANTI-ALIASED. render.gt.ssaa == 2 renders the (unjittered) GT forward at 2x
+				// into a lazily-allocated supersample target, then box-downsamples it in LINEAR HDR into
+				// GroundTruthTarget before tonemap (resolve-in-linear, per the engine invariant). The downsample is
+				// a bilinear tap at each 2x2 block centre = the exact 2x box average. Capture-only cost; the SSAA
+				// target lives on this effect (not RenderTargetComponent) since only compare/dataset use it.
+				const uint32_t ssaa = CVars::ClampedGtSsaa();
+				const auto& gtDesc = vpRT.GroundTruthTarget->GetDesc();
+				Ref<RenderTarget> gtForwardTarget = vpRT.GroundTruthTarget;
+				if (ssaa > 1)
+				{
+					const uint32_t ssW = gtDesc.Width * ssaa;
+					const uint32_t ssH = gtDesc.Height * ssaa;
+					if (!m_GtSsaaTarget || m_GtSsaaW != ssW || m_GtSsaaH != ssH)
+					{
+						if (m_GtSsaaTarget)
+						{
+							Renderer::WaitIdle(); // drain before dropping a possibly in-flight target (rare: capture is fixed-size)
+						}
+						m_GtSsaaTarget = CreateDefaultSceneRenderTarget(ssW, ssH, "ViewportGTSSAA");
+						m_GtSsaaW = ssW;
+						m_GtSsaaH = ssH;
+					}
+					gtForwardTarget = m_GtSsaaTarget;
+				}
+
 				// Ground-truth 2nd render + its tonemap are the shared builders (also used by the primary path).
 				// forceRasterShadow=true: the GT reference always uses the raster shadow map, so when RT shadows
 				// are on the compare metric measures RT (main) vs raster (GT) — the #118 RT-shadow A/B. When RT
 				// is off both renders are raster, so the metric harmlessly reports the upscaler A/B as before.
-				m_Owner.AddForwardPass(fc, cam, vpRT.GroundTruthTarget, "ForwardGT" + passSuffix, false, /*forceRasterShadow*/ true); // GT: never jittered
-				m_Owner.AddTonemapPass(fc, vpRT.GroundTruthTarget->GetDesc().ColorAttachments[0].View, vpRT.GroundTruthPresentTarget,
-				                       "PostProcessGT" + passSuffix, RendererService::TonemapParams{});
+				m_Owner.AddForwardPass(fc, cam, gtForwardTarget, "ForwardGT" + passSuffix, false, /*forceRasterShadow*/ true); // GT: never jittered
+
+				if (ssaa > 1)
+				{
+					// Box-downsample the 2x SSAA GT into GroundTruthTarget's color (linear HDR) via a bilinear
+					// fullscreen tap. The downsample pipeline is COLOR-ONLY (no depth), so it must render into a
+					// color-only render target — GroundTruthTarget itself carries a depth attachment, which would
+					// mismatch the pipeline's undefined depth format. Wrap GT's color image in a depth-less RT
+					// (cached, rebuilt only when the GT color view changes on resize).
+					const Ref<TextureView> gtColor = vpRT.GroundTruthTarget->GetSampleableColorView(0);
+					if (!m_GtDownsampleTarget || m_GtDownsampleColorView != gtColor)
+					{
+						RenderTargetDesc dsDesc{};
+						dsDesc.Width = gtDesc.Width;
+						dsDesc.Height = gtDesc.Height;
+						RenderTargetAttachment ca{};
+						ca.View = gtColor;
+						ca.AttachmentIndex = 0;
+						ca.LoadOp = RenderTargetLoadOp::DontCare; // fully overwritten by the downsample
+						ca.StoreOp = RenderTargetStoreOp::Store;
+						dsDesc.ColorAttachments.push_back(ca);
+						m_GtDownsampleTarget = RenderTarget::Create(dsDesc);
+						m_GtDownsampleColorView = gtColor;
+					}
+					const Ref<RenderTarget> dsTarget = m_GtDownsampleTarget;
+					const Ref<TextureView> ssColor = m_GtSsaaTarget->GetSampleableColorView(0);
+					const PixelFormat gtFmt = gtColor->GetTexture()->GetDesc().Format;
+					fc.Graph.AddPass({.Name = "GTDownsample" + passSuffix,
+					                  .Target = dsTarget,
+					                  .Reads = {{ssColor->GetTexture(), RenderGraph::AccessState::Sampled}},
+					                  .Execute = [this, &fc, ssColor, gtFmt](CommandContext& c)
+					                  {
+						                  const Ref<CommandContext> cref(&c, [](CommandContext*) {});
+						                  m_GtDownsample.Draw(cref, fc.FrameIndex, ssColor, gtFmt);
+					                  }});
+				}
+
+				m_Owner.AddTonemapPass(fc, vpRT.GroundTruthTarget->GetSampleableColorView(0), vpRT.GroundTruthPresentTarget,
+				                       "PostProcessGT" + passSuffix, RendererService::TonemapParams{}); // resolved under MSAA
 
 				// ---- Metrics (#45): PSNR/SSIM of the upscaled present vs the ground-truth present. Runs after
 				// both were written (a compute reduction reading both, sampled). Gated on render.metrics; both
@@ -1283,22 +1691,23 @@ namespace Snowstorm
 				    !vpRT.GroundTruthTarget->GetDesc().ColorAttachments.empty() && vpRT.GroundTruthPresentTarget &&
 				    !vpRT.GroundTruthPresentTarget->GetDesc().ColorAttachments.empty())
 				{
-					const Ref<Texture> lrImg = vpRT.Target->GetDesc().ColorAttachments[0].View->GetTexture();
+					const Ref<Texture> lrImg = vpRT.Target->GetSampleableColorView(0)->GetTexture(); // resolved under MSAA
 					const Ref<Texture> mvImg = vpRT.VelocityTarget->GetDesc().ColorAttachments[0].View->GetTexture();
-					const Ref<Texture> gtImg = vpRT.GroundTruthTarget->GetDesc().ColorAttachments[0].View->GetTexture();
+					const Ref<Texture> gtImg = vpRT.GroundTruthTarget->GetSampleableColorView(0)->GetTexture(); // resolved under MSAA
 					// The tonemapped LDR GT present — the engine's ACTUAL output the metric compares, i.e. the
 					// exact target to train against (#102). Written by the GT tonemap pass above.
 					const Ref<Texture> gtLdrImg = vpRT.GroundTruthPresentTarget->GetDesc().ColorAttachments[0].View->GetTexture();
 					const glm::vec2 jitter = cam.Rt->JitterNdc;
 					const float scale = CVars::ClampedRenderScale();
 					const std::string outDir = CVars::DatasetExportPath.Get();
+					const uint32_t warmup = static_cast<uint32_t>(std::max(0, CVars::DatasetExportWarmup.Get()));
 					fc.Graph.AddPass({.Name = "DatasetExport" + passSuffix,
 					                  .IsCompute = true, // no render target; records readback copies
 					                  .Reads = {{lrImg, RenderGraph::AccessState::Sampled},
 					                            {mvImg, RenderGraph::AccessState::Sampled},
 					                            {gtImg, RenderGraph::AccessState::Sampled},
 					                            {gtLdrImg, RenderGraph::AccessState::Sampled}},
-					                  .Execute = [this, &fc, lrImg, mvImg, gtImg, gtLdrImg, jitter, scale, outDir](CommandContext& c)
+					                  .Execute = [this, &fc, lrImg, mvImg, gtImg, gtLdrImg, jitter, scale, outDir, warmup](CommandContext& c)
 					                  {
 						                  // The GT tonemap pass wrote gtLdrImg and left it in SHADER_READ; the graph now
 						                  // emits the color-write -> compute-read barrier for every .Reads entry of this
@@ -1312,6 +1721,7 @@ namespace Snowstorm
 						                  dsin.JitterNdc = jitter;
 						                  dsin.Scale = scale;
 						                  dsin.FrameIndex = fc.FrameIndex;
+						                  dsin.Warmup = warmup;
 						                  // Non-owning Ref to the graph's context (the pass API takes a Ref; the graph owns it).
 						                  const Ref<CommandContext> cref(&c, [](CommandContext*) {});
 						                  const uint64_t written = m_DatasetExportPass.CaptureAndSerialize(cref, dsin, outDir);
@@ -1324,6 +1734,63 @@ namespace Snowstorm
 			RenderSystem& m_Owner;
 			MetricsPass m_MetricsPass;             // PSNR/SSIM reduction; exclusive to this effect
 			DatasetExportPass m_DatasetExportPass; // readback + .npy serialize; exclusive to this effect
+			// SSAA ground-truth (DLAA #98): lazily-allocated 2x GT render target + a bilinear downsample pass
+			// (2x -> 1x box average) that feeds GroundTruthTarget. Capture-only, so owned here (not on
+			// RenderTargetComponent). m_GtSsaaW/H cache the size for lazy recreate on a viewport resize.
+			Ref<RenderTarget> m_GtSsaaTarget;
+			UpscalePass m_GtDownsample;
+			uint32_t m_GtSsaaW = 0;
+			uint32_t m_GtSsaaH = 0;
+			// Color-only (depth-less) render target wrapping GroundTruthTarget's color image, so the color-only
+			// downsample pipeline's attachment formats match. Rebuilt when the wrapped view changes (GT resize).
+			Ref<RenderTarget> m_GtDownsampleTarget;
+			Ref<TextureView> m_GtDownsampleColorView;
+		};
+
+		// Headless image-quality capture (#153 increment 2). Runs last, only when quality.capture.frames > 0
+		// (a Scripts/quality-bench.py run): on the target frame it copies the FINAL present (LDR sRGB) + the HDR
+		// scene color to disk as .npy, so a real-time technique can be diffed (FLIP/PSNR/SSIM) against the
+		// converged path-traced reference offline. Works in BOTH modes (PT and real-time) since both publish the
+		// same present via the shared LDR chain, so it is not gated on compare. Off = zero cost.
+		class QualityCaptureEffect final : public IViewportEffect
+		{
+		public:
+			explicit QualityCaptureEffect(RenderSystem& owner)
+			    : m_Owner(owner)
+			{
+			}
+
+			[[nodiscard]] const char* Name() const override { return "QualityCapture"; }
+
+			[[nodiscard]] bool ShouldRun(const ViewportRenderContext& v) const override
+			{
+				return CVars::QualityCaptureFrames.Get() > 0 && v.RT.PresentTarget &&
+				       !v.RT.PresentTarget->GetDesc().ColorAttachments.empty();
+			}
+
+			void Contribute(ViewportRenderContext& v) override
+			{
+				FrameContext& fc = v.Frame;
+				// Record the capture on frame == quality.capture.frames (a static camera has accumulated the PT
+				// reference by then); the pass still ticks every frame so the retired slot gets serialized.
+				const uint64_t target = static_cast<uint64_t>(CVars::QualityCaptureFrames.Get());
+				const bool doCapture = fc.Renderer.GetFrameCounter() == target;
+				const Ref<Texture> presentImg = v.RT.PresentTarget->GetDesc().ColorAttachments[0].View->GetTexture();
+				const std::string basePath = CVars::QualityCapturePath.Get();
+				fc.Graph.AddPass({.Name = "QualityCapture" + v.Suffix,
+				                  .IsCompute = true, // no render target; records the readback copy
+				                  .Reads = {{presentImg, RenderGraph::AccessState::Sampled}},
+				                  .Execute = [this, &fc, presentImg, doCapture, basePath](CommandContext& c)
+				                  {
+					                  const Ref<CommandContext> cref(&c, [](CommandContext*) {});
+					                  const uint64_t written = m_Pass.Tick(cref, presentImg, doCapture, fc.FrameIndex, basePath);
+					                  fc.Renderer.SetQualityCaptureWritten(written);
+				                  }});
+			}
+
+		private:
+			RenderSystem& m_Owner;
+			QualityCapturePass m_Pass; // readback + .npy serialize; exclusive to this effect
 		};
 	}
 
@@ -1334,23 +1801,28 @@ namespace Snowstorm
 		// sub-chain / TAA / neural-temporal / the debug tonemaps). Velocity runs right after DepthNormal (both
 		// prepasses) so v.Velocity is published BEFORE GITemporalEffect, which reprojects the GI by it (#125).
 		m_ViewportEffects.clear();
+		m_ViewportEffects.push_back(CreateScope<PathTraceEffect>(*this)); // #153: reference mode, runs first + owns the frame when active
 		m_ViewportEffects.push_back(CreateScope<DepthNormalEffect>(*this));
 		m_ViewportEffects.push_back(CreateScope<VelocityEffect>(*this));
 		m_ViewportEffects.push_back(CreateScope<GIEffect>(*this));
 		m_ViewportEffects.push_back(CreateScope<GITemporalEffect>(*this));
 		m_ViewportEffects.push_back(CreateScope<GIDenoiseEffect>(*this));
 		m_ViewportEffects.push_back(CreateScope<GIUpsampleEffect>(*this));
+		m_ViewportEffects.push_back(CreateScope<SSAOEffect>(*this)); // #151: SSAO (mode 1); RT AO chain below is mode 2
 		m_ViewportEffects.push_back(CreateScope<AOEffect>(*this));
 		m_ViewportEffects.push_back(CreateScope<AOTemporalEffect>(*this));
 		m_ViewportEffects.push_back(CreateScope<AODenoiseEffect>(*this));
 		m_ViewportEffects.push_back(CreateScope<AOUpsampleEffect>(*this));
+		m_ViewportEffects.push_back(CreateScope<SSREffect>(*this)); // #151: SSR (mode 1); RT reflection chain below is mode 2
 		m_ViewportEffects.push_back(CreateScope<ReflectionEffect>(*this));
 		m_ViewportEffects.push_back(CreateScope<ReflectionTemporalEffect>(*this));
 		m_ViewportEffects.push_back(CreateScope<ReflectionDenoiseEffect>(*this));
 		m_ViewportEffects.push_back(CreateScope<ForwardEffect>(*this));
 		m_ViewportEffects.push_back(CreateScope<UpscaleEffect>(*this));
 		m_ViewportEffects.push_back(CreateScope<TemporalEffect>(*this));
+		m_ViewportEffects.push_back(CreateScope<PrevColorSnapshotEffect>(*this)); // #151: snapshot HDR color for next frame's SSR
 		m_ViewportEffects.push_back(CreateScope<LdrChainEffect>(*this));
 		m_ViewportEffects.push_back(CreateScope<CompareEffect>(*this));
+		m_ViewportEffects.push_back(CreateScope<QualityCaptureEffect>(*this)); // #153: last — captures the final present
 	}
 }

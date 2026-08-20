@@ -37,7 +37,9 @@ namespace Snowstorm
 		// compare mode (it needs the ground-truth render). So export forces jitter back on — but ONLY when
 		// dataset.jitter is set (a spatial net trains/infers unjittered; that mismatch is what made the
 		// trained spatial net lose to bilinear in-engine, #102). JitterNdc is recorded per frame.
-		const bool taaActive = CVars::AAMode.Get() == 2;
+		// DLAA (render.aa == 3) is a temporal resolve too — it accumulates sub-pixel jitter exactly like TAA,
+		// so treat it the same for the jitter gate (and the negative MipBias that rides the jittered pass).
+		const bool taaActive = CVars::AAMode.Get() == 2 || CVars::DlaaActive();
 		const bool jitterOn = (CVars::DatasetExport.Get() && CVars::DatasetJitter.Get()) ||
 		                      taaActive ||
 		                      (CVars::Jitter.Get() && !CVars::Compare.Get());
@@ -45,7 +47,10 @@ namespace Snowstorm
 		// Same monotonic counter the whole frame uses (incremented in RendererService::NewFrame before any
 		// system runs). Deterministic per frame, so all cameras this frame share one Halton index.
 		const uint64_t frame = ServiceView<RendererService>().GetFrameCounter();
-		const glm::vec2 jitterPx = HaltonJitterPixels(frame); // [-0.5, 0.5] px, or unused when off
+		// 16-phase Halton ring (was 8): more sub-pixel samples so thin/sub-pixel edges (railings, wires) are
+		// covered more often and accumulate instead of shimmering. UE uses 8 for TAA, more for TSR-class detail;
+		// 16 is the cheap step for thin-feature convergence. Longer ring = slightly slower to fully converge.
+		const glm::vec2 jitterPx = HaltonJitterPixels(frame, 16); // [-0.5, 0.5] px, or unused when off
 
 		for (const auto camView = reg.view<CameraRuntimeComponent, CameraTargetComponent>(); const auto e : camView)
 		{

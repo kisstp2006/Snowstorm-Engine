@@ -7,8 +7,10 @@
 #include "Snowstorm/Components/CameraTargetComponent.hpp"
 #include "Snowstorm/Components/RenderTargetComponent.hpp"
 #include "Snowstorm/Components/ViewportComponent.hpp"
+#include "Snowstorm/Assets/AssetManagerSingleton.hpp"
 #include "Snowstorm/Core/Application.hpp"
 #include "Snowstorm/Core/EngineCVars.hpp"
+#include "Snowstorm/Core/Log.hpp"
 #include "Snowstorm/Render/Renderer.hpp"
 #include "Snowstorm/Render/RendererUtils.hpp"
 
@@ -41,12 +43,17 @@ namespace Snowstorm
 		const float curRenderScale = CVars::ClampedRenderScale();
 		const float curGIScale = CVars::ClampedGIScale();
 		const float curAOScale = CVars::ClampedAOScale();
+		// Forward MSAA (render.msaa) is also a global CVar edit; a change forces the same rebuild path so it
+		// applies live (scene targets reallocated at the new sample count + material/sky pipelines rebuilt).
+		const uint32_t curMsaa = CVars::MsaaSampleCount();
 		const bool scaleChangedGlobal = curRenderScale != m_LastRenderScale ||
 		                                curGIScale != m_LastGIScale ||
-		                                curAOScale != m_LastAOScale;
+		                                curAOScale != m_LastAOScale ||
+		                                curMsaa != m_LastMsaa;
 		m_LastRenderScale = curRenderScale;
 		m_LastGIScale = curGIScale;
 		m_LastAOScale = curAOScale;
+		m_LastMsaa = curMsaa;
 
 		// If you want: when no viewport changed, you can still init new cameras and early-out.
 		const bool anyViewportChanged = !changedViewports.empty();
@@ -107,8 +114,9 @@ namespace Snowstorm
 				const bool missing = !rt.Target || !rt.PresentTarget || !rt.AAIntermediateTarget || !rt.SceneUpscaleTarget ||
 				                     !rt.GroundTruthTarget || !rt.GroundTruthPresentTarget || !rt.VelocityTarget ||
 				                     !rt.GBufferNormalTarget || !rt.GITarget || !rt.GIDenoiser.Allocated() || !rt.GIUpscaleTarget ||
-				                     !rt.AOTarget || !rt.AODenoiser.Allocated() || !rt.AOUpscaleTarget ||
-				                     !rt.ReflectionTarget || !rt.ReflectionDenoiser.Allocated() ||
+				                     !rt.AOTarget || !rt.AOBlurTarget || !rt.AODenoiser.Allocated() || !rt.AOUpscaleTarget ||
+				                     !rt.ReflectionTarget || !rt.ReflectionDenoiser.Allocated() || !rt.PrevSceneColorTarget ||
+				                     !rt.PathTraceAccumTarget ||
 				                     !rt.HistoryTarget[0] || !rt.HistoryTarget[1];
 				// Present target tracks the FULL viewport size; Target tracks the SCALED size. Compare each
 				// against its own expected extent so a scale change (Target only) still triggers a rebuild.
@@ -117,7 +125,12 @@ namespace Snowstorm
 				// GI/AO scales can change independently — rebuild each when its own scaled extent changes.
 				const bool giScaleChanged = rt.GITarget && (rt.GITarget->GetDesc().Width != giW || rt.GITarget->GetDesc().Height != giH);
 				const bool aoScaleChanged = rt.AOTarget && (rt.AOTarget->GetDesc().Width != aoW || rt.AOTarget->GetDesc().Height != aoH);
-				if (missing || viewportResized || scaleChanged || giScaleChanged || aoScaleChanged)
+				// Live MSAA: the scene target's own color-attachment sample count records the active level, so a
+				// render.msaa change shows up as a mismatch here (mirrors scaleChanged). Forces the scene + GT
+				// targets to be reallocated at the new count; the pipeline rebuild below keeps them consistent.
+				const bool msaaChanged = rt.Target && !rt.Target->GetDesc().ColorAttachments.empty() &&
+				                         rt.Target->GetDesc().ColorAttachments[0].View->GetTexture()->GetDesc().SampleCount != curMsaa;
+				if (missing || viewportResized || scaleChanged || giScaleChanged || aoScaleChanged || msaaChanged)
 				{
 					// Drain the GPU before dropping the old targets: replacing the Ref destroys the VkImage/
 					// view immediately, but in-flight frames may still be sampling them (the post-process pass
@@ -167,6 +180,10 @@ namespace Snowstorm
 					// when AO is active. Rebuilt on viewport OR ao.scale change. Independent of GI.
 					rtW.AOTarget = CreateAOTarget(aoW, aoH, "Viewport");
 					rtW.AOTargetView = rtW.AOTarget->GetDefaultView();
+					// SSAO blur output (#151): same half-res shape as AOTarget; the SSAO bilateral blur writes it and
+					// the shared upsample reads it. Always allocated (negligible); only written when SSAO is active.
+					rtW.AOBlurTarget = CreateAOTarget(aoW, aoH, "ViewportAOBlur");
+					rtW.AOBlurTargetView = rtW.AOBlurTarget->GetDefaultView();
 					// AO SVGF denoiser buffers (#130): half-res, rebuilt on viewport OR ao.scale change (tracks AOTarget).
 					AllocateDenoiser(rtW.AODenoiser, aoW, aoH, "ViewportAO");
 					// Full-res AO target (#126): the bilateral upsample renders the half-res AO into this; the
@@ -178,10 +195,28 @@ namespace Snowstorm
 					rtW.ReflectionTargetView = rtW.ReflectionTarget->GetDefaultView();
 					// Reflection SVGF denoiser buffers (#132): full-res, rebuilt on viewport resize.
 					AllocateDenoiser(rtW.ReflectionDenoiser, w, h, "ViewportRefl");
+					// Previous-frame HDR scene color (#151, SSR): full-res, always allocated (negligible); only
+					// snapshotted + read when SSR is active. Rebuilt on viewport resize like the history targets.
+					rtW.PrevSceneColorTarget = CreateColorOnlyHDRTarget(w, h, "ViewportPrevColor");
+					// Path-tracer accumulation (#153): full-res fp32, always allocated (only written in PT mode).
+					rtW.PathTraceAccumTarget = CreatePathTraceTarget(w, h, "Viewport");
+					rtW.PathTraceAccumView = rtW.PathTraceAccumTarget->GetDefaultView();
 					// TAA history ping-pong (#44): two full-res color-only HDR targets. Always allocated;
 					// only rendered into when render.aa == TAA. Recreated on resize so history matches size.
 					rtW.HistoryTarget[0] = CreateColorOnlyHDRTarget(w, h, "ViewportHistory0");
 					rtW.HistoryTarget[1] = CreateColorOnlyHDRTarget(w, h, "ViewportHistory1");
+
+					// The scene targets above were (re)built at curMsaa; the scene material pipelines must match
+					// or the forward pass would mix a 4x target with 1x pipelines (validation error / no draw).
+					// Rebuild the cached material pipelines in place now — the GPU was drained above, and material
+					// instances share the same Pipeline object, so the swap reaches them with no re-resolution.
+					// No-op on a plain resize (sample count unchanged). The sky pipeline self-heals in SkyPass.
+					m_World->GetSingleton<AssetManagerSingleton>().RebuildPipelinesForSampleCount(curMsaa);
+
+					if (msaaChanged || (missing && curMsaa != 1))
+					{
+						SS_CORE_INFO("Forward MSAA: {}x", curMsaa);
+					}
 				}
 			}
 		}

@@ -343,6 +343,11 @@ namespace Snowstorm
 		                   vpRT.HistoryTarget[0] && vpRT.HistoryTarget[1] &&
 		                   !vpRT.HistoryTarget[0]->GetDesc().ColorAttachments.empty();
 		v.TaaOn = taaOn;
+		// DLAA (render.aa == 3): the neural temporal network resolves at native res (UpscaleEffect runs it even
+		// at scale==1). Needs jitter (CameraJitterSystem) + motion vectors, exactly like TAA; folded into
+		// velocityNeeded below. Mutually exclusive with taaOn (both keyed off render.aa).
+		const bool dlaa = CVars::DlaaActive();
+		v.Dlaa = dlaa;
 		// Neural TEMPORAL upscaler (#98, render.upscaler == 2): reprojects the previous neural output by
 		// motion vectors, so it needs the velocity buffer too. Only meaningful when actually upscaling
 		// (scale < 1); the upscale block below re-checks that.
@@ -352,13 +357,16 @@ namespace Snowstorm
 		const bool exporting = CVars::DatasetExport.Get() && comparing;
 		// GI (#125), reflection (#129), and AO (#130) temporal accumulation reproject by motion vectors, so any
 		// forces the velocity pass on whenever its effect runs (mirrors VelocityEffect::ShouldRun so flag + pass agree).
+		// SSR (#151) ALWAYS needs velocity (it reprojects the previous-frame color at the hit), not just when a
+		// temporal stage is on — so it forces the pass on whenever SSR is active, separately from the RT-temporal ORs.
 		const bool giTemporal = (CVars::GIRTActive() && CVars::GITemporalActive()) ||
+		                        CVars::ReflectionsSSRActive() ||
 		                        (CVars::ReflectionsRTActive() && CVars::ReflectionTemporalActive()) ||
 		                        (CVars::AoRTActive() && CVars::AOTemporalActive());
 		// velocityNeeded is cached on the context because several effects branch on it: VelocityEffect (whether
 		// to render the buffer), LdrChainEffect (the tonemap debug view samples it), and CompareEffect (dataset
 		// export reads it as a channel).
-		const bool velocityNeeded = (debugView == 1 || taaOn || neuralTemporal || exporting || giTemporal) && vpRT.VelocityTarget &&
+		const bool velocityNeeded = (debugView == 1 || taaOn || dlaa || neuralTemporal || exporting || giTemporal) && vpRT.VelocityTarget &&
 		                            !vpRT.VelocityTarget->GetDesc().ColorAttachments.empty() &&
 		                            vpRT.VelocityTarget->GetDesc().ColorAttachments[0].View;
 		v.VelocityNeeded = velocityNeeded;
@@ -369,12 +377,19 @@ namespace Snowstorm
 		// additionally check their own gates. Reflections need it because ReflectionPass reconstructs each
 		// pixel's world position + normal from the G-buffer (like GI), so reflections-only must still prepass.
 		const bool giActive = CVars::GIRTActive();
-		const bool aoActive = CVars::AoRTActive();
-		const bool reflActive = CVars::ReflectionsRTActive();
-		const bool gbufferNeeded = (giActive || aoActive || reflActive || debugView == 5 || debugView == 6 || debugView == 7 || debugView == 2 || debugView == 3) &&
+		const bool aoActive = CVars::AoActive();            // SSAO or RT AO — both need the depth+normal prepass + debug view 2 (#151)
+		const bool reflActive = CVars::ReflectionsActive(); // SSR or RT reflections — both need the depth+normal prepass (#151)
+		// Path-trace mode (#153) owns the frame: the reference PT produces the whole image, so skip the entire
+		// G-buffer substrate (DepthNormal/GI/AO/SSR/RT-reflection) — forward/upscale/TAA are gated off too.
+		const bool gbufferNeeded = !CVars::PathTraceActive() &&
+		                           (giActive || aoActive || reflActive || debugView == 5 || debugView == 6 || debugView == 7 || debugView == 2 || debugView == 3) &&
 		                           vpRT.GBufferNormalTarget && !vpRT.GBufferNormalTarget->GetDesc().ColorAttachments.empty() &&
 		                           vpRT.GBufferNormalTarget->GetDesc().ColorAttachments[0].View;
 		v.GBufferNeeded = gbufferNeeded;
+
+		// While assets stream in, meshes/textures show the magenta placeholder; keep the path tracer resetting so
+		// those frames never bake into the converged accumulation (#153).
+		v.PathTraceSceneSettling = SingletonView<AssetManagerSingleton>().PendingLoadCount() > 0;
 
 		// Tonemap debug params (#44/#124): visualize an aux buffer ONLY when its debug view is explicitly
 		// selected — NOT merely when the buffer is being rendered (TAA/GI render their buffers but must show

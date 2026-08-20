@@ -37,11 +37,11 @@ from pathlib import Path
 # Env names follow the CVar->env mapping (dots->_, SS_ prefix). All use TAA (render.aa=2) since the
 # RT effects need it for a clean result and that's the realistic configuration.
 CONFIGS = [
-    ("rt-off",   {"SS_RENDER_SHADOWS_MODE": "1", "SS_RENDER_AO_RT": "0", "SS_RENDER_REFLECTIONS_RT": "0", "SS_RENDER_GI_RT": "0"}),
-    ("shadows",  {"SS_RENDER_SHADOWS_MODE": "2", "SS_RENDER_AO_RT": "0", "SS_RENDER_REFLECTIONS_RT": "0", "SS_RENDER_GI_RT": "0"}),
-    ("+ao",      {"SS_RENDER_SHADOWS_MODE": "2", "SS_RENDER_AO_RT": "1", "SS_RENDER_REFLECTIONS_RT": "0", "SS_RENDER_GI_RT": "0"}),
-    ("+refl",    {"SS_RENDER_SHADOWS_MODE": "2", "SS_RENDER_AO_RT": "1", "SS_RENDER_REFLECTIONS_RT": "1", "SS_RENDER_GI_RT": "0"}),
-    ("+gi",      {"SS_RENDER_SHADOWS_MODE": "2", "SS_RENDER_AO_RT": "1", "SS_RENDER_REFLECTIONS_RT": "1", "SS_RENDER_GI_RT": "1"}),
+    ("rt-off",   {"SS_RENDER_SHADOWS_MODE": "1", "SS_RENDER_AO_MODE": "0", "SS_RENDER_REFLECTIONS_MODE": "0", "SS_RENDER_GI_RT": "0"}),
+    ("shadows",  {"SS_RENDER_SHADOWS_MODE": "2", "SS_RENDER_AO_MODE": "0", "SS_RENDER_REFLECTIONS_MODE": "0", "SS_RENDER_GI_RT": "0"}),
+    ("+ao",      {"SS_RENDER_SHADOWS_MODE": "2", "SS_RENDER_AO_MODE": "2", "SS_RENDER_REFLECTIONS_MODE": "0", "SS_RENDER_GI_RT": "0"}),
+    ("+refl",    {"SS_RENDER_SHADOWS_MODE": "2", "SS_RENDER_AO_MODE": "2", "SS_RENDER_REFLECTIONS_MODE": "2", "SS_RENDER_GI_RT": "0"}),
+    ("+gi",      {"SS_RENDER_SHADOWS_MODE": "2", "SS_RENDER_AO_MODE": "2", "SS_RENDER_REFLECTIONS_MODE": "2", "SS_RENDER_GI_RT": "1"}),
 ]
 
 DEFAULT_SCENE = "Projects/Sandbox/assets/scenes/Sponza.world"
@@ -64,6 +64,10 @@ def run_config(name: str, env_overrides: dict, exe: Path, cwd: Path, frames: int
     env["SS_STARTUP_SCENE"] = scene
     env["SS_RENDER_AA"] = "2"  # TAA: the realistic config the RT effects assume
     env["SS_VALIDATION_NONFATAL"] = "1"
+    # Config isolation: run pure code-defaults + the env overrides below, ignoring this machine's persisted
+    # SnowstormConfig.cfg. Without it a persisted setting (e.g. render.shadow.resolution=4096) leaks into every
+    # config and silently skews the baseline diff -- the benchmark must depend only on code, not local settings.
+    env["SS_CONFIG_IGNORE"] = "1"
     env.update(env_overrides)
     if layer_path and layer_path.is_dir():
         env["VK_ADD_LAYER_PATH"] = str(layer_path)

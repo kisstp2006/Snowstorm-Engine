@@ -85,15 +85,57 @@ namespace Snowstorm
 					// pass that runs after tonemap; a baseline for the upscaler comparison. Read per-frame, so it flips
 					// live.
 					{
-						const char* aaLabels[] = {"None", "FXAA", "TAA"};
+						const char* aaLabels[] = {"None", "FXAA", "TAA", "DLAA (neural)"};
 						int aa = CVars::AAMode.Get();
-						if (aa < 0 || aa > 2)
+						if (aa < 0 || aa > 3)
 						{
 							aa = 0;
 						}
-						if (ImGui::Combo("Anti-Aliasing", &aa, aaLabels, 3))
+						if (ImGui::Combo("Anti-Aliasing", &aa, aaLabels, 4))
 						{
 							CVars::AAMode.Set(aa);
+						}
+						if (ImGui::IsItemHovered())
+						{
+							ImGui::SetTooltip("TAA = classical temporal resolve. DLAA = the neural temporal network run "
+							                  "at native res as the resolve (needs a DLAA-trained neural.weights to look "
+							                  "right; falls back to a plain copy until then).");
+						}
+
+						// Forward MSAA (geometric-edge AA), orthogonal to the AA mode above (MSAA + TAA compose).
+						// LIVE: changing it reallocates the scene targets and rebuilds the material/sky pipelines in
+						// place (ViewportResizeSystem), like the render.scale sliders. Options are capped at the
+						// device's max color+depth sample count.
+						{
+							const char* msaaLabels[] = {"Off (1x)", "2x", "4x", "8x"};
+							const uint32_t msaaCounts[] = {1u, 2u, 4u, 8u};
+							const uint32_t deviceMax = Renderer::GetMaxSampleCount();
+							int optionCount = 1;
+							for (int i = 1; i < 4; ++i)
+							{
+								if (msaaCounts[i] <= deviceMax)
+								{
+									optionCount = i + 1;
+								}
+							}
+							int msaaIdx = 0;
+							for (int i = 0; i < optionCount; ++i)
+							{
+								if (static_cast<int>(msaaCounts[i]) <= CVars::Msaa.Get())
+								{
+									msaaIdx = i;
+								}
+							}
+							if (ImGui::Combo("MSAA", &msaaIdx, msaaLabels, optionCount))
+							{
+								CVars::Msaa.Set(static_cast<int>(msaaCounts[msaaIdx]));
+							}
+							if (ImGui::IsItemHovered())
+							{
+								ImGui::SetTooltip("Forward multisample AA for geometric (triangle-edge) aliasing. Applies "
+								                  "live. Does NOT affect the RT effects (GI/AO/reflections/shadows run on a "
+								                  "single-sample G-buffer) or shader/specular aliasing. Composes with TAA.");
+							}
 						}
 
 						// TAA depth-disocclusion rejection (#127): rejects reprojected history across a depth
@@ -109,6 +151,17 @@ namespace Snowstorm
 						{
 							ImGui::SetTooltip("TAA disocclusion rejection: reject history whose depth differs by more than "
 							                  "this fraction of view-space depth. 0 = off. ~0.02 is a good start.");
+						}
+						// Slope-aware disocclusion (A/B): accounts for the surface's own slope so steep/grazing
+						// surfaces aren't false-rejected (edge shimmer) while real disocclusions still reject (ghosts).
+						if (bool slope = CVars::TaaDepthRejectSlope.Get(); ImGui::Checkbox("Slope-aware Reject##TAA", &slope))
+						{
+							CVars::TaaDepthRejectSlope.Set(slope);
+						}
+						if (ImGui::IsItemHovered())
+						{
+							ImGui::SetTooltip("On (default): threshold accounts for surface slope over the reprojection "
+							                  "(fixes the flat-threshold no-middle-ground). Off: flat relative-depth curve.");
 						}
 						ImGui::EndDisabled();
 					}
@@ -321,28 +374,43 @@ namespace Snowstorm
 				if (ImGui::CollapsingHeader("Ambient Occlusion", ImGuiTreeNodeFlags_DefaultOpen))
 				{
 
-					// Ray-traced AO (#118): darkens the ambient term in crevices/contacts that IBL + analytic ambient
-					// miss. Only offered on an RT GPU (the shader's RTAO branch is compiled out otherwise). It traces a
-					// few rays/frame and relies on TAA to average them smooth, so the radius/intensity sliders are only
-					// enabled when RT AO is on.
+					// AO technique (#151): a mode CVar mirroring Shadows. Off / SSAO (screen-space hemisphere kernel +
+					// bilateral blur, any GPU) / Ray Traced (hemisphere occupancy rays, RT GPU only). Both write the
+					// same forward AO slot, so this combo IS the thesis A/B flip. Radius/Intensity/Resolution are shared;
+					// rays + the SVGF temporal/denoise controls are RT-only (SSAO uses a fixed kernel + its own blur).
 					{
 						const bool aoRtSupported = Renderer::IsRayTracingSupported();
-						ImGui::BeginDisabled(!aoRtSupported);
-						if (bool aoRt = CVars::AoRT.Get(); ImGui::Checkbox("Ray-traced (RT)##AO", &aoRt))
+						int mode = CVars::AoMode.Get();
+						if (mode < 0 || mode > 2)
 						{
-							CVars::AoRT.Set(aoRt);
+							mode = 0;
 						}
-						ImGui::EndDisabled();
+						{
+							const char* modeLabels[] = {"Off", "SSAO", "Ray Traced"};
+							const int modeCount = aoRtSupported ? 3 : 2; // hide Ray Traced when the device can't do it
+							if (ImGui::Combo("Technique##AO", &mode, modeLabels, modeCount))
+							{
+								CVars::AoMode.Set(mode);
+							}
+						}
+						const bool ssaoMode = (mode == 1);
+						const bool rtMode = (mode == 2);
+						const bool anyMode = (mode != 0);
 						if (!aoRtSupported)
 						{
-							ImGui::TextDisabled("(requires an RT-capable GPU)");
+							ImGui::TextDisabled("(Ray Traced requires an RT-capable GPU)");
 						}
-						else
+						else if (rtMode)
 						{
-							ImGui::TextDisabled("(needs TAA for a clean result)");
+							ImGui::TextDisabled("(RT needs TAA for a clean result)");
+						}
+						else if (ssaoMode)
+						{
+							ImGui::TextDisabled("(SSAO: screen-space, temporally stable on its own)");
 						}
 
-						ImGui::BeginDisabled(!CVars::AoRT.Get());
+						// Shared by both techniques: occlusion distance, strength, internal trace resolution.
+						ImGui::BeginDisabled(!anyMode);
 						if (float aoRadius = CVars::AORadius.Get(); ImGui::SliderFloat("Radius##AO", &aoRadius, 0.05f, 3.0f, "%.2f m", ImGuiSliderFlags_AlwaysClamp))
 						{
 							CVars::AORadius.Set(aoRadius);
@@ -351,18 +419,23 @@ namespace Snowstorm
 						{
 							CVars::AOIntensity.Set(aoIntensity);
 						}
-						// Rays/pixel/frame: more = less noise (esp. under motion, where temporal reuse weakens), ~linear cost.
-						if (int aoRays = CVars::AORayCount.Get(); ImGui::SliderInt("Rays/pixel##AO", &aoRays, 1, 16, "%d", ImGuiSliderFlags_AlwaysClamp))
-						{
-							CVars::AORayCount.Set(aoRays);
-						}
-						// Internal resolution (#126): AO traces at this fraction of viewport res, then a bilateral upsample
-						// restores full res — mirrors the GI Resolution slider. 0.5 = quarter the rays; 1.0 = full-res.
+						// Internal resolution (#126): AO runs at this fraction of viewport res, then a bilateral upsample
+						// restores full res — shared by SSAO + RT. 0.5 = quarter the pixels; 1.0 = full-res.
 						if (float aoScale = CVars::AOScale.Get(); ImGui::SliderFloat("Resolution##AO", &aoScale, 0.25f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp))
 						{
 							CVars::AOScale.Set(aoScale);
 						}
 						ImGui::TextDisabled("(0.5 = quarter-res trace + upsample; 1.0 = full-res)");
+						ImGui::EndDisabled();
+
+						// RT-only: rays/pixel + the SVGF temporal/denoise chain. SSAO uses a fixed 16-sample kernel and
+						// its own depth+normal bilateral blur, so these don't apply to it (#151).
+						ImGui::BeginDisabled(!rtMode);
+						// Rays/pixel/frame: more = less noise (esp. under motion, where temporal reuse weakens), ~linear cost.
+						if (int aoRays = CVars::AORayCount.Get(); ImGui::SliderInt("Rays/pixel##AO", &aoRays, 1, 16, "%d", ImGuiSliderFlags_AlwaysClamp))
+						{
+							CVars::AORayCount.Set(aoRays);
+						}
 
 						// AO SVGF denoiser (#130): temporal accumulation + edge-avoiding à-trous over the AO factor —
 						// the shared machinery GI/reflections use (#132). Mirrors the GI denoiser controls; sub-sliders
@@ -418,28 +491,44 @@ namespace Snowstorm
 				if (ImGui::CollapsingHeader("Reflections", ImGuiTreeNodeFlags_DefaultOpen))
 				{
 
-					// Ray-traced reflections (#118): trace a reflection ray, shade the hit, blend into the specular for
-					// smooth surfaces (blurry for rough ones via the roughness-driven cone). RT-only; the shader branch is
-					// compiled out on a non-RT GPU. Like RTAO it's one ray/frame + TAA, so it needs TAA for a clean result;
-					// the sliders are only enabled when RT reflections are on.
+					// Reflection technique (#151): a mode CVar mirroring AO/Shadows. Off / SSR (screen-space depth
+					// march reflecting the previous frame's color, any GPU) / Ray Traced (traced + re-shaded hit, RT
+					// GPU only). Both write the same forward slot, so this combo IS the thesis A/B. Intensity / Max
+					// Roughness / Range are shared; Cone Scale + Rays/pixel are RT-only (SSR is a single sharp march);
+					// the temporal + denoise tail is shared (both techniques flow through it).
 					{
 						const bool reflRtSupported = Renderer::IsRayTracingSupported();
-						ImGui::BeginDisabled(!reflRtSupported);
-						if (bool reflRt = CVars::ReflectionsRT.Get(); ImGui::Checkbox("Ray-traced (RT)##Refl", &reflRt))
+						int mode = CVars::ReflectionsMode.Get();
+						if (mode < 0 || mode > 2)
 						{
-							CVars::ReflectionsRT.Set(reflRt);
+							mode = 0;
 						}
-						ImGui::EndDisabled();
+						{
+							const char* modeLabels[] = {"Off", "SSR", "Ray Traced"};
+							const int modeCount = reflRtSupported ? 3 : 2; // hide Ray Traced when the device can't do it
+							if (ImGui::Combo("Technique##Refl", &mode, modeLabels, modeCount))
+							{
+								CVars::ReflectionsMode.Set(mode);
+							}
+						}
+						const bool ssrMode = (mode == 1);
+						const bool rtMode = (mode == 2);
+						const bool anyMode = (mode != 0);
 						if (!reflRtSupported)
 						{
-							ImGui::TextDisabled("(requires an RT-capable GPU)");
+							ImGui::TextDisabled("(Ray Traced requires an RT-capable GPU)");
 						}
-						else
+						else if (rtMode)
 						{
-							ImGui::TextDisabled("(needs TAA for a clean result)");
+							ImGui::TextDisabled("(RT needs TAA for a clean result)");
+						}
+						else if (ssrMode)
+						{
+							ImGui::TextDisabled("(SSR reflects on-screen geometry; edges fade to the env cube)");
 						}
 
-						ImGui::BeginDisabled(!CVars::ReflectionsRT.Get());
+						// Shared by both techniques: contribution, roughness cutoff, ray/march distance.
+						ImGui::BeginDisabled(!anyMode);
 						if (float reflIntensity = CVars::ReflectionIntensity.Get(); ImGui::SliderFloat("Intensity##Refl", &reflIntensity, 0.0f, 2.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp))
 						{
 							CVars::ReflectionIntensity.Set(reflIntensity);
@@ -448,28 +537,27 @@ namespace Snowstorm
 						{
 							CVars::ReflectionMaxRoughness.Set(reflMaxRough);
 						}
-						if (float reflCone = CVars::ReflectionConeScale.Get(); ImGui::SliderFloat("Cone Scale##Refl", &reflCone, 0.0f, 3.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp))
-						{
-							CVars::ReflectionConeScale.Set(reflCone);
-						}
 						if (float reflRange = CVars::ReflectionRange.Get(); ImGui::SliderFloat("Range (m)##Refl", &reflRange, 0.5f, 60.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp))
 						{
 							CVars::ReflectionRange.Set(reflRange);
 						}
-						// Rays/pixel/frame: on GLOSSY surfaces more rays average the cone in-frame (less shimmer under
-						// motion); a perfect mirror is one deterministic ray regardless. ~linear cost.
+						ImGui::EndDisabled();
+
+						// RT-only: the glossy cone + in-frame multi-ray averaging. SSR is a single sharp screen march.
+						ImGui::BeginDisabled(!rtMode);
+						if (float reflCone = CVars::ReflectionConeScale.Get(); ImGui::SliderFloat("Cone Scale##Refl", &reflCone, 0.0f, 3.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp))
+						{
+							CVars::ReflectionConeScale.Set(reflCone);
+						}
 						if (int reflRays = CVars::ReflectionRayCount.Get(); ImGui::SliderInt("Rays/pixel##Refl", &reflRays, 1, 16, "%d", ImGuiSliderFlags_AlwaysClamp))
 						{
 							CVars::ReflectionRayCount.Set(reflRays);
 						}
-						if (ImGui::IsItemHovered())
-						{
-							ImGui::SetTooltip("Max reflection ray distance (perf cap): nearer surfaces reflect real geometry; past this the ray sees the sky.");
-						}
+						ImGui::EndDisabled();
 
-						// Denoiser (#129): temporal accumulation + SVGF variance-guided à-trous over the few-ray reflection.
-						// Temporal reprojects the previous frame (kills static shimmer); the à-trous smooths the edge/
-						// disocclusion noise temporal can't reach. Sub-sliders enabled only when their stage is on.
+						// Denoiser tail (#129), shared by SSR + RT: temporal accumulation + SVGF variance-guided
+						// à-trous. Sub-sliders enabled only when their stage is on.
+						ImGui::BeginDisabled(!anyMode);
 						ImGui::Spacing();
 						if (bool reflTemporal = CVars::ReflectionTemporal.Get(); ImGui::Checkbox("Temporal Accumulation##Refl", &reflTemporal))
 						{
@@ -597,6 +685,65 @@ namespace Snowstorm
 					}
 
 				} // Global Illumination
+
+				ImGui::Spacing();
+				if (ImGui::CollapsingHeader("Path Tracer (Reference)", ImGuiTreeNodeFlags_DefaultOpen))
+				{
+					// Reference path tracer (#153): a brute-force ground-truth MODE (not real-time). When on it
+					// replaces the scene render and progressively accumulates while the camera is still — the
+					// correctness anchor the screen-space/RT techniques are measured against. RT-GPU only.
+					const bool ptSupported = Renderer::IsRayTracingSupported();
+					ImGui::BeginDisabled(!ptSupported);
+					if (bool pt = CVars::PathTrace.Get(); ImGui::Checkbox("Enable (replaces scene render)##PT", &pt))
+					{
+						CVars::PathTrace.Set(pt);
+					}
+					ImGui::EndDisabled();
+					if (!ptSupported)
+					{
+						ImGui::TextDisabled("(requires an RT-capable GPU)");
+					}
+					else
+					{
+						ImGui::TextDisabled("(accumulates while the camera is still; moving resets it)");
+					}
+
+					ImGui::BeginDisabled(!CVars::PathTrace.Get());
+					if (int spp = CVars::PathTraceSpp.Get(); ImGui::SliderInt("Samples/frame##PT", &spp, 1, 64, "%d", ImGuiSliderFlags_AlwaysClamp))
+					{
+						CVars::PathTraceSpp.Set(spp);
+					}
+					if (int b = CVars::PathTraceBounces.Get(); ImGui::SliderInt("Max bounces##PT", &b, 1, 32, "%d", ImGuiSliderFlags_AlwaysClamp))
+					{
+						CVars::PathTraceBounces.Set(b);
+					}
+					if (float fc = CVars::PathTraceClamp.Get(); ImGui::SliderFloat("Firefly clamp##PT", &fc, 0.0f, 64.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp))
+					{
+						CVars::PathTraceClamp.Set(fc);
+					}
+					if (ImGui::IsItemHovered())
+					{
+						ImGui::SetTooltip("Caps each path sample's radiance to kill slow-to-converge fireflies. Lower = cleaner but slightly biases bright highlights; 0 = unbounded (unbiased, noisy).");
+					}
+					if (float wc = CVars::PathTraceWeightClamp.Get(); ImGui::SliderFloat("Path regularization##PT", &wc, 0.0f, 32.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp))
+					{
+						CVars::PathTraceWeightClamp.Set(wc);
+					}
+					if (ImGui::IsItemHovered())
+					{
+						ImGui::SetTooltip("Max per-bounce BSDF weight: bounds the indirect throughput spikes (near-mirror grazing bounces) that leave fixed hot pixels, without blurring reflections. Lower = cleaner but slightly biases indirect; 0 = off (unbiased ground truth).");
+					}
+					if (bool en = CVars::PathTraceEnvNee.Get(); ImGui::Checkbox("Environment NEE (MIS)##PT", &en))
+					{
+						CVars::PathTraceEnvNee.Set(en);
+					}
+					if (ImGui::IsItemHovered())
+					{
+						ImGui::SetTooltip("Samples the sky directly (a shadow ray) and MIS-combines it with the BSDF continuation, converging sky-lit areas faster (especially glossy). Unbiased: the converged image is the same on or off. Toggling restarts accumulation.");
+					}
+					ImGui::EndDisabled();
+
+				} // Path Tracer
 
 				ImGui::Spacing();
 				if (ImGui::CollapsingHeader("Image-Based Lighting", ImGuiTreeNodeFlags_DefaultOpen))

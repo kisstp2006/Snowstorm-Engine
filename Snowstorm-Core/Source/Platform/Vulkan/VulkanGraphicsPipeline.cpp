@@ -474,8 +474,8 @@ namespace Snowstorm
 		// --- Multisample ---
 		VkPipelineMultisampleStateCreateInfo msaa{};
 		msaa.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-		msaa.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-		msaa.sampleShadingEnable = VK_FALSE;
+		msaa.rasterizationSamples = static_cast<VkSampleCountFlagBits>(m_Desc.SampleCount == 0 ? 1 : m_Desc.SampleCount);
+		msaa.sampleShadingEnable = VK_FALSE; // coverage-only MSAA (no per-sample fragment shading)
 
 		// --- Depth/stencil ---
 		VkPipelineDepthStencilStateCreateInfo depthStencil{};
@@ -677,6 +677,24 @@ namespace Snowstorm
 		{
 			SS_CORE_INFO("Hot-reloaded graphics pipeline '{}' (shader v{}).", m_Desc.DebugName, m_BuiltShaderVersion);
 		}
+	}
+
+	void VulkanGraphicsPipeline::SetSampleCount(const uint32_t samples)
+	{
+		const uint32_t s = samples == 0 ? 1 : samples;
+		if (m_Desc.SampleCount == s)
+		{
+			return;
+		}
+
+		// Rebuild in place at the new sample count. Drain first (any in-flight command buffer may reference the
+		// old VkPipeline). Same swap-the-handle mechanism as Reload, so existing Ref<Pipeline> holders (material
+		// instances) bind the new one next frame — no re-resolution needed.
+		m_Desc.SampleCount = s;
+		vkDeviceWaitIdle(m_Device);
+		Destroy();
+		Build();
+		SS_CORE_INFO("Rebuilt graphics pipeline '{}' at {}x MSAA.", m_Desc.DebugName, s);
 	}
 
 	VulkanGraphicsPipeline::~VulkanGraphicsPipeline()

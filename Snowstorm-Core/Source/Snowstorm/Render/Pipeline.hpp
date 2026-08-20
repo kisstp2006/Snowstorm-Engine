@@ -152,6 +152,11 @@ namespace Snowstorm
 		PixelFormat DepthFormat = PixelFormat::Unknown;
 		bool HasStencil = false;
 
+		// MSAA: rasterization sample count (1 = no MSAA). Must equal the sample count of every
+		// attachment in the render pass this pipeline draws into (Vulkan requirement). Only the
+		// forward/sky/depth-prepass pipelines that render into the multisampled scene target set >1.
+		uint32_t SampleCount = 1;
+
 		PipelineRasterState Raster{};
 		PipelineDepthStencilState DepthStencil{};
 		PipelineBlendState Blend{};
@@ -179,6 +184,12 @@ namespace Snowstorm
 		// unchanged (editing shader math): a binding-layout change would invalidate the renderer's cached
 		// descriptor sets, so backends log and refuse rather than corrupt state. See ShaderReloadSystem.
 		virtual void Reload() {}
+
+		// Live MSAA: rebuild the backend pipeline in place at a new rasterization sample count (updates the
+		// desc + swaps the internal handle, like Reload). No-op if unchanged or on pipeline types without
+		// multisample state (compute). Only the scene-target graphics pipelines (material + sky) are switched,
+		// coordinated with the scene target reallocation, when render.msaa changes. Caller ensures GPU idle.
+		virtual void SetSampleCount(uint32_t /*samples*/) {}
 
 		static Ref<Pipeline> Create(const PipelineDesc& desc);
 
