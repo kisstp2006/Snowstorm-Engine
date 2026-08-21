@@ -1,5 +1,6 @@
 #include "TlasBuildSystem.hpp"
 
+#include "Snowstorm/Assets/AssetManagerSingleton.hpp"
 #include "Snowstorm/Components/MaterialComponent.hpp"
 #include "Snowstorm/Components/MeshComponent.hpp"
 #include "Snowstorm/Components/TransformComponent.hpp"
@@ -83,9 +84,26 @@ namespace Snowstorm
 			return;
 		}
 
-		// Rebuild when the scene changed OR RT just turned on (the scene's per-frame dirty flags were consumed
-		// on prior frames, so a plain dirty-check would miss the enable edge).
-		if (m_BuiltOnce && !justEnabled && !IsSceneDirtyThisFrame())
+		// Toggling render.omm swaps which BLAS each cutout instance uses (OMM vs any-hit); force a rebuild on
+		// the edge so the A/B / safety switch takes effect on a static scene.
+		const bool ommEnabled = CVars::OmmEnabled.Get();
+		const bool ommToggled = m_BuiltOnce && ommEnabled != m_LastOmmEnabled;
+		m_LastOmmEnabled = ommEnabled;
+
+		// While textures are still streaming, keep rebuilding: a cutout instance whose albedo isn't resident yet
+		// uses the any-hit fallback BLAS this frame (correct but unoptimized) and its OMM must bake once the real
+		// pixels arrive. Nothing else marks the scene dirty on a texture-only completion, so gate on the async
+		// load count. m_PrevPendingLoads carries one extra frame past the drain so the just-resident albedo
+		// triggers the final rebuild that bakes its OMM.
+		auto& assets = SingletonView<AssetManagerSingleton>();
+		const uint32_t pendingLoads = assets.PendingLoadCount();
+		const bool streaming = pendingLoads > 0 || m_PrevPendingLoads > 0;
+		m_PrevPendingLoads = pendingLoads;
+
+		// Rebuild when the scene changed OR RT just turned on OR render.omm toggled OR assets are still streaming
+		// (the scene's per-frame dirty flags were consumed on prior frames, so a plain dirty-check would miss
+		// those edges).
+		if (m_BuiltOnce && !justEnabled && !ommToggled && !streaming && !IsSceneDirtyThisFrame())
 		{
 			return;
 		}
@@ -104,6 +122,13 @@ namespace Snowstorm
 		// geometry through it (Inc 2). Filled in lockstep with `instances`, so record[i] describes the
 		// instance the GPU stamps instanceCustomIndex = i.
 		std::vector<GeometryRecord> geoRecords;
+
+		// A cutout (glTF MASK) instance uses an OMM-carrying BLAS on an OMM-capable device (the micromap resolves
+		// coverage during traversal, any-hit only on UNKNOWN edges); elsewhere it falls back to the
+		// FORCE_NO_OPAQUE any-hit path. kOmmSubdivisionLevel = 4^level microtriangles per triangle.
+		const bool ommDevice = Renderer::IsOpacityMicromapSupported() && ommEnabled;
+		constexpr uint32_t kOmmSubdivisionLevel = 3;
+		uint32_t ommDeferred = 0; // cutout instances on the any-hit fallback this frame because their albedo isn't resident
 		for (auto view = reg.view<TransformComponent, MeshComponent>(); const entt::entity e : view)
 		{
 			const auto& mc = reg.Read<MeshComponent>(e);
@@ -112,7 +137,40 @@ namespace Snowstorm
 				continue;
 			}
 
-			const Ref<BLAS>& blas = mc.MeshInstance->GetOrBuildBLAS();
+			// Read the material up front: it decides both the geometry record and whether this is a cutout
+			// instance (which picks the OMM BLAS and drops FORCE_NO_OPAQUE). May be null (async) — then the
+			// record stays a BaseColor-white fallback and the instance is treated as opaque.
+			const Material::Constants* c = nullptr;
+			if (const auto* matc = reg.try_get_const<MaterialComponent>(e); matc && matc->MaterialInstance)
+			{
+				c = &matc->MaterialInstance->GetConstants();
+			}
+			const bool masked = c && c->AlphaMaskEnabled != 0;
+			// The OMM bakes the albedo alpha ONCE at BLAS build and caches the result. If the albedo texture isn't
+			// resident yet (its slot still holds the async magenta placeholder, alpha = 1), that bake classifies
+			// every microtriangle OPAQUE -> solid cutouts, cached forever. Defer to the any-hit fallback until the
+			// real pixels land; the streaming rebuild above re-enters here and bakes the OMM once resident.
+			const bool albedoReady = !masked || assets.IsTextureSlotResident(c->AlbedoTextureIndex);
+			const bool useOmm = masked && ommDevice && albedoReady;
+			if (masked && ommDevice && !albedoReady)
+			{
+				++ommDeferred;
+			}
+
+			// OMM path builds a GPU-baked micromap BLAS; it returns null while the bake compute pipeline is still
+			// compiling, so fall back to the plain BLAS + FORCE_NO_OPAQUE any-hit that frame (retried next build).
+			Ref<BLAS> blas;
+			bool ommBuilt = false;
+			if (useOmm)
+			{
+				blas = mc.MeshInstance->GetOrBuildOmmBlas(kOmmSubdivisionLevel, c->AlbedoTextureIndex, c->AlphaCutoff,
+				                                          c->BaseColor.a);
+				ommBuilt = blas != nullptr;
+			}
+			if (!ommBuilt)
+			{
+				blas = mc.MeshInstance->GetOrBuildBLAS();
+			}
 			if (!blas)
 			{
 				continue;
@@ -122,35 +180,31 @@ namespace Snowstorm
 			const glm::mat4 model = tc.GetTransformMatrix();
 			instances.push_back({model, blas->GetDeviceAddress()});
 			instanceEntities.push_back(e);
+			// Masked geometry must traverse non-opaque so the alpha test runs. With an OMM the micromap drives
+			// opacity (and FORCE_NO_OPAQUE would OVERRIDE it, forcing any-hit everywhere), so only the non-OMM
+			// fallback sets the instance flag; the OMM BLAS is already built non-opaque.
+			instances.back().ForceNonOpaque = masked && !ommBuilt;
 
 			GeometryRecord rec{};
 			rec.VertexAddress = mc.MeshInstance->GetVertexBuffer()->GetGPUAddress();
 			rec.IndexAddress = mc.MeshInstance->GetIndexBuffer()->GetGPUAddress();
 			rec.Model = model;
-			// Material may not be resolved yet (async) — a null record still shades as BaseColor white; the
-			// table stays index-aligned regardless, so a missing material never desyncs the mapping.
-			if (const auto* matc = reg.try_get_const<MaterialComponent>(e); matc && matc->MaterialInstance)
+			if (c)
 			{
-				const Material::Constants& c = matc->MaterialInstance->GetConstants();
-				rec.AlbedoTextureIndex = c.AlbedoTextureIndex;
-				rec.BaseColor = c.BaseColor;
-				// Alpha-cutout state for the RT any-hit test (Inc 2): masked instances become
-				// FORCE_NON_OPAQUE in the TLAS and the traversal alpha-tests the albedo at the hit UV.
-				rec.AlphaMaskEnabled = c.AlphaMaskEnabled;
-				rec.AlphaCutoff = c.AlphaCutoff;
+				rec.AlbedoTextureIndex = c->AlbedoTextureIndex;
+				rec.BaseColor = c->BaseColor;
+				rec.AlphaMaskEnabled = c->AlphaMaskEnabled;
+				rec.AlphaCutoff = c->AlphaCutoff;
 				// PBR block (#153) for the reference path tracer: the full material so PT hits shade with the
 				// real BRDF (metallic/roughness/emissive + normal/MR maps), not just albedo.
-				rec.MetallicRoughnessTextureIndex = c.MetallicRoughnessTextureIndex;
-				rec.NormalTextureIndex = c.NormalTextureIndex;
-				rec.EmissiveTextureIndex = c.EmissiveTextureIndex;
-				rec.Metallic = c.Metallic;
-				rec.Roughness = c.Roughness;
-				rec.EmissiveR = c.EmissiveColor.r;
-				rec.EmissiveG = c.EmissiveColor.g;
-				rec.EmissiveB = c.EmissiveColor.b;
-				// Flag masked instances FORCE_NON_OPAQUE in the TLAS so the any-hit alpha test actually runs
-				// (the shader-side cutout is otherwise dead — every hit auto-commits as opaque, #151).
-				instances.back().ForceNonOpaque = (c.AlphaMaskEnabled != 0);
+				rec.MetallicRoughnessTextureIndex = c->MetallicRoughnessTextureIndex;
+				rec.NormalTextureIndex = c->NormalTextureIndex;
+				rec.EmissiveTextureIndex = c->EmissiveTextureIndex;
+				rec.Metallic = c->Metallic;
+				rec.Roughness = c->Roughness;
+				rec.EmissiveR = c->EmissiveColor.r;
+				rec.EmissiveG = c->EmissiveColor.g;
+				rec.EmissiveB = c->EmissiveColor.b;
 			}
 			geoRecords.push_back(rec);
 		}
@@ -219,6 +273,18 @@ namespace Snowstorm
 		{
 			SS_CORE_INFO("TLAS rebuilt: {} instance(s).", count);
 			m_LastLoggedCount = count;
+		}
+
+		// Cutouts whose albedo hasn't streamed in bake no OMM this frame and run on the any-hit fallback (correct,
+		// just unoptimized); they re-bake once resident. Log the count only when it changes (settles to 0 as
+		// textures land) so a slow load doesn't spam.
+		if (ommDeferred != m_LastOmmDeferredLogged)
+		{
+			if (ommDeferred > 0)
+			{
+				SS_CORE_INFO("OMM bake deferred for {} cutout instance(s) awaiting albedo residency.", ommDeferred);
+			}
+			m_LastOmmDeferredLogged = ommDeferred;
 		}
 	}
 }

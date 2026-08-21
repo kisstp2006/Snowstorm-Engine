@@ -40,4 +40,26 @@ namespace Snowstorm
 		}
 		return m_BLAS;
 	}
+
+	const Ref<BLAS>& Mesh::GetOrBuildOmmBlas(const uint32_t subdivisionLevel, const uint32_t albedoTextureIndex,
+	                                         const float alphaCutoff, const float baseColorAlpha)
+	{
+		if (!m_OmmBlas)
+		{
+			const uint32_t triangleCount = m_IndexCount / 3;
+			// GPU-bake the micromap states from the material's albedo alpha, then attach to a non-opaque BLAS.
+			// Null when the bake pipeline is still compiling: leave m_OmmBlas null (returned below) so the gather
+			// falls back to the any-hit path this frame and retries next.
+			const Ref<Micromap> micromap =
+			    Micromap::CreateBaked(m_VertexBuffer->GetGPUAddress(), m_IndexBuffer->GetGPUAddress(), triangleCount,
+			                          subdivisionLevel, albedoTextureIndex, alphaCutoff, baseColorAlpha, "Mesh OMM");
+			if (!micromap)
+			{
+				return m_OmmBlas; // still null; retried next call
+			}
+			m_OmmBlas = BLAS::Create(m_VertexBuffer, m_VertexCount, sizeof(Vertex), offsetof(Vertex, Position),
+			                         m_IndexBuffer, m_IndexCount, "Mesh OMM BLAS", micromap);
+		}
+		return m_OmmBlas;
+	}
 }

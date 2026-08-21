@@ -49,6 +49,15 @@ namespace Snowstorm
 		// path (#118); false => raster fallback. Forwards to the backend capability query.
 		static bool IsRayTracingSupported();
 
+		// True when the device supports + enabled opacity micromaps (VK_EXT_opacity_micromap). Gates the OMM
+		// bake/attach path; false => the any-hit alpha test alone handles cutout geometry.
+		static bool IsOpacityMicromapSupported();
+
+		// GPU candidates (candidate-index order = render.gpu index) + the chosen index. For the editor's GPU
+		// picker; the selection is written to render.gpu (Persist) and applies on the next launch.
+		static const std::vector<std::string>& GetGpuNames();
+		static int GetSelectedGpuIndex();
+
 		// True when the device supports + enabled fp16 shader math + 16-bit storage. Gates the neural conv's
 		// fp16 permutation (# fp16 inference); false => fp32 fallback. Forwards to the backend capability query.
 		static bool IsFloat16Supported();

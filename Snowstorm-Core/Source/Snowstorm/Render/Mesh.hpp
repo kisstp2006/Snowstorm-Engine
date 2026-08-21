@@ -40,6 +40,13 @@ namespace Snowstorm
 		// sizeof(Vertex)); a TLAS instance references its device address. Callers gate on RT support.
 		[[nodiscard]] const Ref<BLAS>& GetOrBuildBLAS();
 
+		// Variant that builds (and caches) a BLAS carrying an opacity micromap for an alpha-cutout mesh on an
+		// OMM-capable device (#OMM). The micromap states are GPU-baked from the material's albedo alpha at the
+		// given subdivision level. Returns a null Ref if the bake pipeline isn't ready yet (async compile) — the
+		// caller falls back to the FORCE_NO_OPAQUE any-hit path that frame. Gate on IsOpacityMicromapSupported().
+		[[nodiscard]] const Ref<BLAS>& GetOrBuildOmmBlas(uint32_t subdivisionLevel, uint32_t albedoTextureIndex,
+		                                                 float alphaCutoff, float baseColorAlpha);
+
 	private:
 		Ref<Buffer> m_VertexBuffer;
 		Ref<Buffer> m_IndexBuffer;
@@ -49,6 +56,7 @@ namespace Snowstorm
 
 		MeshBounds m_Bounds{}; //-- bounds won't be set by default
 
-		Ref<BLAS> m_BLAS; // lazily built on first GetOrBuildBLAS(); null until then / when RT unsupported
+		Ref<BLAS> m_BLAS;    // lazily built on first GetOrBuildBLAS(); null until then / when RT unsupported
+		Ref<BLAS> m_OmmBlas; // OMM-carrying BLAS, lazily built on first GetOrBuildOmmBlas() (masked + OMM device)
 	};
 }

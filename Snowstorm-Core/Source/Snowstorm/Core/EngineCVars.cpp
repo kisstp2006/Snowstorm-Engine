@@ -75,6 +75,10 @@ namespace Snowstorm::CVars
 
 	CVar<std::string> StartupScene{"startup.scene", "", "Path to a .world to load at startup (empty = the active project's StartScene); e.g. Projects/Sandbox/assets/scenes/Sponza.world", CVarFlags::ReadOnly};
 
+	CVar<std::string> GpuSelect{"render.gpu", "", "Select the physical GPU by case-insensitive name substring (e.g. \"9070\", \"NVIDIA\") or candidate index (\"0\",\"1\"); empty = auto (prefer a discrete GPU). Read once at device creation, so a change applies on the next launch. Persisted; the editor's GPU picker writes it.", CVarFlags::Persist};
+
+	CVar<bool> OmmEnabled{"render.omm", true, "Use opacity micromaps (VK_EXT_opacity_micromap) for RT cutout geometry when supported; off = the inline any-hit alpha test alone. Read at TLAS build (change forces a rebuild).", CVarFlags::Persist};
+
 	CVar<float> Exposure{"render.exposure", 1.0f, "Linear exposure multiplier applied before tonemapping (1.0 = neutral)", CVarFlags::Persist};
 
 	CVar<float> RenderScale{"render.scale", 1.0f, "Internal render scale: scene renders at this fraction of viewport res then upscales (1.0 = native, 0.5 = half). Clamped to [0.25, 1.0]", CVarFlags::Persist};
@@ -115,7 +119,7 @@ namespace Snowstorm::CVars
 
 	CVar<int> Msaa{"render.msaa", 1, "Forward MSAA sample count: 1 = off, 2/4/8 = multisample the forward color+depth for geometric-edge AA, resolved before post. Does NOT cover the RT effects (single-sample G-buffer) or shader/specular aliasing. Applies live (targets + pipelines rebuilt on change); clamped to the device max.", CVarFlags::Persist};
 
-	CVar<int> DebugView{"render.debugview", 0, "Viewport debug overlay: 0 = Normal (tonemapped scene), 1 = Motion Vectors (per-pixel screen-space velocity as color; drives the velocity pass + tonemap debug branch, #44), 2 = Ambient Occlusion (DefaultLit outputs the isolated grayscale AO term for tuning RTAO, #118), 3 = Reflections (raw reflected albedo from the RT reflection trace, for verifying hit resolution, #118), 4 = Global Illumination (raw RT GI indirect term, for tuning intensity/range, #118), 5 = World Normals (the depth+normal prepass G-buffer, [-1,1] normal mapped to RGB, for verifying the half-res GI substrate, #124), 6 = Half-res GI raw (the raw half-res GI irradiance buffer, tonemapped, before the bilateral upsample, #124), 7 = Half-res GI denoised (the same buffer AFTER temporal accumulation + à-trous, the A/B against view 6 that shows what the denoiser did, #125)", CVarFlags::Persist};
+	CVar<int> DebugView{"render.debugview", 0, "Viewport debug overlay: 0 = Normal (tonemapped scene), 1 = Motion Vectors (per-pixel screen-space velocity as color; drives the velocity pass + tonemap debug branch, #44), 2 = Ambient Occlusion (DefaultLit outputs the isolated grayscale AO term for tuning RTAO, #118), 3 = Reflections (raw reflected albedo from the RT reflection trace, for verifying hit resolution, #118), 4 = Global Illumination (raw RT GI indirect term, for tuning intensity/range, #118), 5 = World Normals (the depth+normal prepass G-buffer, [-1,1] normal mapped to RGB, for verifying the half-res GI substrate, #124), 6 = Half-res GI raw (the raw half-res GI irradiance buffer, tonemapped, before the bilateral upsample, #124), 7 = Half-res GI denoised (the same buffer AFTER temporal accumulation + à-trous, the A/B against view 6 that shows what the denoiser did, #125), 8 = Half-res RT shadow raw (the noisy 1-ray/pixel stochastic aggregate shadow ratio before temporal+denoise), 9 = Half-res RT shadow denoised (the same buffer AFTER temporal + à-trous, the A/B against view 8)", CVarFlags::Persist};
 
 	CVar<float> TaaBlend{"render.taa.blend", 0.9f, "TAA base history weight while moving (higher = smoother/more lag). Live-tunable (#44)", CVarFlags::Persist};
 
@@ -124,6 +128,8 @@ namespace Snowstorm::CVars
 	CVar<float> TaaDepthReject{"render.taa.depth_reject", 0.02f, "TAA depth-disocclusion rejection threshold: reject reprojected history whose linear depth differs by more than this fraction of view-space depth (kills ghost trails on disoccluded silhouettes). 0 = off (#127). With render.taa.depth_reject.slope on, this is the small BASE fraction added on top of the surface-slope allowance.", CVarFlags::Persist};
 
 	CVar<bool> TaaDepthRejectSlope{"render.taa.depth_reject.slope", true, "TAA disocclusion test curve (A/B). On (default) = SLOPE-AWARE: the reject threshold accounts for the depth change the surface's own slope predicts over the reprojection distance, so steep/grazing continuous surfaces aren't false-rejected (shimmer) while real disocclusions still reject (no ghost) -- removes the flat threshold's no-middle-ground tradeoff. Off = the flat relative-depth curve (pre-slope). Uses render.taa.depth_reject as the threshold either way.", CVarFlags::Persist};
+
+	CVar<float> RtDepthReject{"render.rt.depth_reject", 0.02f, "RT DENOISER depth-disocclusion rejection threshold (GI/AO/reflections/shadows temporal), DECOUPLED from render.taa.depth_reject: reject reprojected history whose linear view-depth differs by more than this fraction, so a surface newly revealed under motion RESETS to the current estimate instead of ramping up from stale (dark) history over many frames (the 'lights pop into existence while moving' artifact). Kept separate from the TAA knob so it can stay non-zero for the denoiser even when TAA disocclusion is tuned to 0. 0 = off.", CVarFlags::Persist};
 
 	CVar<float> Sharpen{"render.sharpen", 0.0f, "Post-tonemap contrast-adaptive sharpen (AMD CAS) strength, 0..1 (0 = off). Display-space + hue-safe; counters TAA/upscale softening, runs after tonemap like FXAA. Guidance: ~0.3 for native+TAA, ~0.5 when upscaling (render.scale<1); >0.7 over-sharpens and re-introduces aliasing TAA removed, so keep it light (#44)", CVarFlags::Persist};
 
@@ -135,6 +141,32 @@ namespace Snowstorm::CVars
 
 	CVar<float> ShadowStrength{"render.shadow.strength", 1.0f, "Shadow darkness (1 = full occlusion, 0 = none)", CVarFlags::Persist};
 
+	CVar<float> ShadowScale{"render.shadows.scale", 1.0f, "Stochastic RT shadow internal resolution: the shadow-ratio trace runs at this fraction of viewport res, then a depth-aware bilateral upsample restores full res. DEFAULT 1.0 (FULL-RES): shadows are the highest-frequency signal in the frame (sharp contact/thin shadows), so a half-res trace + bilateral upsample can't reconstruct them and looks blocky/soft — production stochastic shadows (MegaLights/RTXDI) trace per full-res pixel. 0.5 = quarter the pixels (~4x cheaper) for a perf/quality A/B. Clamped to [0.25, 1.0].", CVarFlags::Persist};
+
+	CVar<float> ShadowNormalBias{"render.shadows.normalbias", 0.02f, "RT sun-shadow ray-origin normal offset in world units: pushes the shadow ray start off the surface along the geometric normal to avoid self-intersection (shadow acne). Too small = acne (surfaces shadow themselves); too large = peter-panning (contact shadows detach). Clamped to [0, 0.2].", CVarFlags::Persist};
+
+	CVar<int> ShadowRayCount{"render.shadows.rays", 4, "Stochastic RT shadow rays per pixel per frame: each independently importance-samples one light (proportional to unshadowed contribution) and traces one shadow ray; the average is the aggregate shadow ratio. More rays = less per-frame variance (the 1-ray estimate is a noisy binary sample) at ~linear cost, so the temporal + denoiser converge cleaner — especially at edges and under motion. Clamped to [1, 16]. Mirrors render.ao.rays.", CVarFlags::Persist};
+
+	CVar<bool> ShadowTemporal{"render.shadows.temporal", true, "Stochastic RT shadow temporal accumulation: reproject the previous accumulated shadow ratio by the motion vectors and blend with this frame's 1-ray estimate (depth-disocclusion reject, shared SVGF temporal). REQUIRED for a usable result — the 1 importance-sampled ray/pixel is very noisy without it. Off = the raw stochastic estimate. Read per-frame; forces the velocity pass on.", CVarFlags::Persist};
+
+	CVar<float> ShadowTemporalBlend{"render.shadows.temporal.blend", 0.9f, "RT shadow temporal history weight while moving. The velocity-aware blend lerps between this and maxblend by staticness. Mirrors AO/GI's 0.9.", CVarFlags::Persist};
+
+	CVar<float> ShadowTemporalMaxBlend{"render.shadows.temporal.maxblend", 0.97f, "RT shadow temporal history weight when the pixel is ~static: deeper accumulation to converge the 1-ray estimate. Mirrors AO/GI's 0.97.", CVarFlags::Persist};
+
+	CVar<bool> ShadowDenoise{"render.shadows.denoise", true, "Stochastic RT shadow spatial denoiser: the shared edge-avoiding a-trous over the shadow ratio, guided by the G-buffer (normal + depth), after temporal accumulation. Off = temporal-only. Read per-frame.", CVarFlags::Persist};
+
+	CVar<int> ShadowDenoiseIterations{"render.shadows.denoise.iterations", 3, "RT shadow denoiser a-trous pass count: each doubles the tap stride (1,2,4,...) for a wider edge-aware blur. More = smoother but costlier. Clamped to [0, 5]; 0 disables like render.shadows.denoise off.", CVarFlags::Persist};
+
+	CVar<float> ShadowDenoiseVariance{"render.shadows.denoise.variance", 4.0f, "SVGF variance-guided a-trous luminance-phi for RT shadows: widens the a-trous in noisy/disoccluded regions, tight where converged. 0 = off. ~2-8 typical.", CVarFlags::Persist};
+
+	CVar<bool> ShadowStochastic{"render.shadows.stochastic", false, "RT shadow technique within mode 2 (Ray Traced). OFF (default) = per-light INLINE RT shadows (one sharp ray per light in DefaultLit, the #118 path) — higher quality at a low light count. ON = the half-res STOCHASTIC aggregate-ratio pass (MegaLights-lite): importance-sample one light/pixel, trace one ray, denoise. Constant cost regardless of light count (scales to many lights) but noisier at ~10 lights. Prefer ShadowStochasticActive() over reading this directly.", CVarFlags::Persist};
+
+	CVar<float> ShadowDenoisePenumbra{"render.shadows.denoise.penumbra", 0.1f, "NRD SIGMA-style penumbra-aware a-trous kernel sizing for RT shadows: scale the tap stride by the receiver's nearest-occluder distance (world units) so a NEAR occluder keeps a tight kernel (sharp contact shadow) and a FAR occluder widens it (smooth soft penumbra) — what a fixed-stride a-trous can't do (it over-blurs contacts or under-blurs soft penumbrae at one setting). Value = 1/reference-distance: penumbra saturates to the widest kernel around (1/this) world units (0.1 => ~10 units). 0 = off (uniform kernel). Shadows only; GI/AO/reflections are unaffected.", CVarFlags::Persist};
+
+	CVar<bool> ShadowDenoiseClamp{"render.shadows.denoise.clamp", false, "Stochastic RT shadow temporal neighborhood-clamp: clip reprojected history into the current 3x3 range. Correct for GI/reflections (kills moving-edge ghosts), but WRONG for the HDR stochastic shadow signal — its per-frame estimate is bimodal (0 vs a rare bright RIS spike), so at a multi-light overlap the 3x3 box is low/narrow and clamps the accumulating history dark (a black seam between two lights that no denoising fills). OFF (default) fixes that; ON restores the clamp for an A/B (may re-introduce a little motion ghosting on shadows). GI/AO/reflections keep the clamp regardless.", CVarFlags::Persist};
+
+	CVar<bool> ShadowImportanceLog{"render.shadows.importance.log", true, "Stochastic RT shadow light-importance weighting: ON = log(1+luminance) perceptual weight, OFF = linear luminance. Log weighting downweights very strong lights so a strong-but-occluded light can't dominate the per-pixel reservoir and drag the aggregate estimate dark where a weaker VISIBLE light should light the pixel (the 'strong occluded light' issue UE5 MegaLights fixes the same way, SIGGRAPH 2025). Used identically in the reservoir AND the RIS normalization, so the estimate stays unbiased. Most visible where two lights' influence overlaps.", CVarFlags::Persist};
+
 	CVar<float> ShadowSunAngleDeg{"render.shadow.sun_angle_deg", 1.0f, "Sun angular diameter in degrees — drives RT soft-shadow penumbra width for the directional light (real sun ~0.53 deg; larger = softer). Only used by the RT soft path.", CVarFlags::Persist};
 
 	CVar<float> ShadowSourceRadius{"render.shadow.source_radius", 0.1f, "Local light (spot/point) source radius in world units — drives RT soft-shadow penumbra width (larger/closer source = softer). Only used by the RT soft path.", CVarFlags::Persist};
@@ -144,6 +176,8 @@ namespace Snowstorm::CVars
 	CVar<float> IBLIntensity{"render.ibl.intensity", 0.75f, "Multiplier on the IBL ambient contribution", CVarFlags::Persist};
 
 	CVar<float> GISpecAmbientFade{"render.gi.spec_ambient_fade", 1.0f, "#163: when RT GI is active, fade the un-occluded env-cube SPECULAR ambient by roughness (0 = off/old behavior, 1 = full linear roughness fade). Rough surfaces' wide env-specular lobe otherwise acts as a second un-occluded ambient overlapping the occluded diffuse GI, over-filling shadows vs the path-traced reference.", CVarFlags::Persist};
+
+	CVar<float> GIBounceAmbient{"render.gi.bounce_ambient", 0.5f, "#39: scale on the un-occluded IBL ambient added at each RT-GI secondary hit (0..1; 1 = old behavior). The GI gather is itself the indirect-diffuse estimator, so a full un-occluded ambient at every bounce double-counts the sky and floods shadowed nooks (residual over-brightness vs the path-traced reference after #163). Default 0.5 measured to improve FLIP AND SSIM on all viewpoints vs the reference; the path tracer injects no free ambient per bounce.", CVarFlags::Persist};
 
 	CVar<int> AoMode{"render.ao.mode", 0, "Ambient-occlusion technique (#151): 0 = Off, 1 = SSAO (screen-space hemisphere kernel + bilateral blur, any GPU), 2 = RT (hardware ray query, requires an RT GPU; falls back to Off on a non-RT device). Both write the same forward AO slot for a clean same-scene A/B. Replaces the old render.ao.rt bool (#118). RT mode traces a few rays/frame and needs TAA (render.aa = TAA) for a clean result; SSAO is temporally stable on its own.", CVarFlags::Persist};
 
@@ -400,6 +434,58 @@ namespace Snowstorm::CVars
 		return s;
 	}
 
+	float ClampedShadowScale()
+	{
+		const float s = ShadowScale.Get();
+		if (s < 0.25f)
+		{
+			return 0.25f;
+		}
+		if (s > 1.0f)
+		{
+			return 1.0f;
+		}
+		return s;
+	}
+
+	int ClampedShadowRayCount()
+	{
+		const int n = ShadowRayCount.Get();
+		if (n < 1)
+		{
+			return 1;
+		}
+		if (n > 16)
+		{
+			return 16;
+		}
+		return n;
+	}
+
+	bool ShadowTemporalActive()
+	{
+		return ShadowsRTActive() && ShadowTemporal.Get();
+	}
+
+	int ClampedShadowDenoiseIterations()
+	{
+		const int n = ShadowDenoiseIterations.Get();
+		if (n < 0)
+		{
+			return 0;
+		}
+		if (n > 5)
+		{
+			return 5;
+		}
+		return n;
+	}
+
+	bool ShadowDenoiseActive()
+	{
+		return ShadowsRTActive() && ShadowDenoise.Get() && ClampedShadowDenoiseIterations() > 0;
+	}
+
 	float ClampedCompareSplit()
 	{
 		const float s = CompareSplit.Get();
@@ -427,6 +513,15 @@ namespace Snowstorm::CVars
 		// the SS_RAYTRACING shader permutation exists. On a non-RT GPU mode 2 degrades to no shadows (the RT
 		// branch is compiled out), matching the graceful-fallback contract of the original render.shadows.rt.
 		return ShadowsMode.Get() == 2 && Renderer::IsRayTracingSupported();
+	}
+
+	bool ShadowStochasticActive()
+	{
+		// The half-res STOCHASTIC aggregate-shadow-ratio pass (MegaLights-lite) runs only when RT shadows are
+		// active AND this opt-in is set. Default OFF: mode 2 keeps the per-light INLINE RT shadows (sharp, one
+		// map per light), which are higher quality on a low light count. Stochastic is the many-light-scaling
+		// experiment — noisier at ~10 lights (below cached shadow maps), so it's not the default.
+		return ShadowsRTActive() && ShadowStochastic.Get();
 	}
 
 	bool AoSSAOActive()

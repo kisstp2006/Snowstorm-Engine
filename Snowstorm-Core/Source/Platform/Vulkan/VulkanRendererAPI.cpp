@@ -3,6 +3,7 @@
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_vulkan.h"
 #include "VulkanBindlessManager.hpp"
+#include "VulkanOmmBaker.hpp"
 
 #include "Snowstorm/Core/Base.hpp"
 #include "Snowstorm/Core/Log.hpp"
@@ -186,6 +187,10 @@ namespace Snowstorm
 		vkDeviceWaitIdle(device);
 
 		VulkanBindlessManager::Get().Shutdown();
+
+		// Function-local-static singleton owning the OMM bake pipeline + sampler; release here (device still alive)
+		// so its Refs don't destruct at process exit on a dead device. No-op when OMM never baked (m_Pipeline null).
+		VulkanOmmBaker::Get().Shutdown();
 
 		// You must clear all swapchain textures we wrapped
 		// These hold Ref<VulkanTexture> which own VMA allocations
@@ -436,6 +441,21 @@ namespace Snowstorm
 	bool VulkanRendererAPI::IsRayTracingSupported() const
 	{
 		return VulkanContext::Get().SupportsRayTracing();
+	}
+
+	bool VulkanRendererAPI::IsOpacityMicromapSupported() const
+	{
+		return VulkanContext::Get().SupportsOpacityMicromap();
+	}
+
+	const std::vector<std::string>& VulkanRendererAPI::GetGpuNames() const
+	{
+		return VulkanContext::Get().GetGpuNames();
+	}
+
+	int VulkanRendererAPI::GetSelectedGpuIndex() const
+	{
+		return VulkanContext::Get().GetSelectedGpuIndex();
 	}
 
 	bool VulkanRendererAPI::IsFloat16Supported() const

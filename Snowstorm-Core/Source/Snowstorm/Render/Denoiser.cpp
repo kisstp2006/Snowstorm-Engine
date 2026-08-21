@@ -38,9 +38,10 @@ namespace Snowstorm
 
 		const float nearPlane = cam.Cam ? cam.Cam->PerspectiveNear : 0.1f;
 		const float farPlane = cam.Cam ? cam.Cam->PerspectiveFar : 500.0f;
-		const float depthReject = CVars::TaaDepthReject.Get(); // share the TAA disocclusion threshold
+		const float depthReject = CVars::RtDepthReject.Get(); // RT denoiser disocclusion, decoupled from the TAA knob (which stays 0)
 		const float blend = cfg.TemporalBlend;
 		const float maxBlend = cfg.TemporalMaxBlend;
+		const bool neighborhoodClamp = cfg.NeighborhoodClamp; // off for the HDR stochastic shadow signal
 
 		fc.Graph.AddPass({.Name = std::string(cfg.NamePrefix) + "Temporal" + suffix,
 		                  .IsCompute = true,
@@ -52,11 +53,11 @@ namespace Snowstorm
 		                            {prevMomView->GetTexture(), RenderGraph::AccessState::Sampled}},
 		                  .Writes = {{curHistView->GetTexture(), RenderGraph::AccessState::Storage},
 		                             {curMomView->GetTexture(), RenderGraph::AccessState::Storage}},
-		                  .Execute = [this, &fc, raw, gbuffer, depth, velocity, prevHistView, curHistView, prevMomView, curMomView, w, h, historyValid, blend, maxBlend, nearPlane, farPlane, depthReject](CommandContext& c)
+		                  .Execute = [this, &fc, raw, gbuffer, depth, velocity, prevHistView, curHistView, prevMomView, curMomView, w, h, historyValid, blend, maxBlend, nearPlane, farPlane, depthReject, neighborhoodClamp](CommandContext& c)
 		                  {
 			                  m_Temporal.Dispatch(fc.Ctx, fc.FrameIndex, raw, gbuffer, depth, velocity, prevHistView,
 			                                      prevMomView, curMomView, curHistView, w, h, historyValid,
-			                                      blend, maxBlend, nearPlane, farPlane, depthReject);
+			                                      blend, maxBlend, nearPlane, farPlane, depthReject, neighborhoodClamp);
 		                  }});
 
 		return curHistView; // the accumulated buffer is now the live signal
@@ -87,7 +88,8 @@ namespace Snowstorm
 			const float hitPhi = cfg.HitDistPhi; // #130 Inc B: 0 for GI/reflections (no-op)
 			const float nearPlane = cfg.NearPlane;
 			const float farPlane = cfg.FarPlane;
-			const float depthSigma = cfg.DepthSigma; // Fix B: relative view-depth edge-stop
+			const float depthSigma = cfg.DepthSigma;       // Fix B: relative view-depth edge-stop
+			const float penumbraScale = cfg.PenumbraScale; // SIGMA penumbra kernel (shadows only; 0 = identity)
 
 			fc.Graph.AddPass({.Name = std::string(cfg.NamePrefix) + "Denoise" + std::to_string(i) + suffix,
 			                  .IsCompute = true,
@@ -96,9 +98,9 @@ namespace Snowstorm
 			                            {depth->GetTexture(), RenderGraph::AccessState::Sampled},
 			                            {hitGuide->GetTexture(), RenderGraph::AccessState::Sampled}},
 			                  .Writes = {{dstView->GetTexture(), RenderGraph::AccessState::Storage}},
-			                  .Execute = [this, &fc, slot, step, srcView, gbuffer, depth, dstView, hitGuide, w, h, lumaPhi, hitPhi, nearPlane, farPlane, depthSigma](CommandContext& c)
+			                  .Execute = [this, &fc, slot, step, srcView, gbuffer, depth, dstView, hitGuide, w, h, lumaPhi, hitPhi, nearPlane, farPlane, depthSigma, penumbraScale](CommandContext& c)
 			                  {
-				                  m_Atrous.Dispatch(fc.Ctx, fc.FrameIndex, slot, step, srcView, gbuffer, depth, dstView, w, h, lumaPhi, hitGuide, hitPhi, nearPlane, farPlane, depthSigma);
+				                  m_Atrous.Dispatch(fc.Ctx, fc.FrameIndex, slot, step, srcView, gbuffer, depth, dstView, w, h, lumaPhi, hitGuide, hitPhi, nearPlane, farPlane, depthSigma, penumbraScale);
 			                  }});
 
 			dst ^= 1;

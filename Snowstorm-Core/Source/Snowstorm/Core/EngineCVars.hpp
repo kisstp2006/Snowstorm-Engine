@@ -153,6 +153,16 @@ namespace Snowstorm::CVars
 	// the PBR sampling path that Startup.world doesn't, without a manual Content Browser open.
 	extern CVar<std::string> StartupScene;
 
+	// GPU override for multi-GPU boxes: pick the physical device by case-insensitive name substring
+	// (e.g. "9070", "NVIDIA") or by candidate index ("0","1"); empty = auto (prefer a discrete GPU). Resolved
+	// once at device creation (VulkanContext), which logs every candidate so the indices are discoverable.
+	extern CVar<std::string> GpuSelect;
+
+	// Use opacity micromaps for RT cutout geometry when the device supports them (VK_EXT_opacity_micromap):
+	// the hardware resolves coverage per-microtriangle so the any-hit alpha test runs only on UNKNOWN edges.
+	// Off = the inline any-hit test alone (FORCE_NO_OPAQUE). Read at TLAS build; an A/B knob + a safety switch.
+	extern CVar<bool> OmmEnabled;
+
 	// Linear exposure multiplier applied before tonemapping in DefaultLit. 1.0 = neutral; raise to
 	// brighten, lower to darken. Runtime-tweakable from the editor's Settings panel.
 	extern CVar<float> Exposure;
@@ -206,6 +216,10 @@ namespace Snowstorm::CVars
 	// 0 = off (pre-#127 behaviour), for a clean A/B.
 	extern CVar<float> TaaDepthReject;
 	extern CVar<bool> TaaDepthRejectSlope;
+
+	// RT denoiser disocclusion threshold, decoupled from the TAA knob so revealed surfaces reset (not ramp from
+	// stale dark history) under motion even when render.taa.depth_reject is 0. Used by the shared Denoiser temporal.
+	extern CVar<float> RtDepthReject;
 
 	// Post-tonemap contrast-adaptive sharpen (AMD CAS) strength, 0..1 (#44). Display-space (runs after
 	// tonemap, like FXAA), so it's hue-safe — a sharpen in linear HDR before ACES turns overshoot into a hue
@@ -299,6 +313,49 @@ namespace Snowstorm::CVars
 	// How dark shadows get: 1 = full occlusion, 0 = none. Lerps the sun's visibility toward 1.
 	extern CVar<float> ShadowStrength;
 
+	// RT sun-shadow half-res internal resolution (fraction of viewport res). The sun-visibility trace runs at
+	// this scale, then a bilateral upsample restores full res. Clamp with ClampedShadowScale(). Mirrors
+	// render.ao.scale / render.gi.scale; independent of both (its own half-res grid).
+	extern CVar<float> ShadowScale;
+	[[nodiscard]] float ClampedShadowScale();
+
+	// RT sun-shadow ray-origin normal offset (world units): acne vs peter-panning tuning. Read per-frame by
+	// RTShadowEffect into the pass CB (edits take effect immediately).
+	extern CVar<float> ShadowNormalBias;
+
+	// Stochastic RT shadow rays per pixel: more = less per-frame variance (the 1-ray estimate is a noisy binary
+	// sample), so the temporal + denoiser converge cleaner. Clamp with ClampedShadowRayCount(). Mirrors AO rays.
+	extern CVar<int> ShadowRayCount;
+	[[nodiscard]] int ClampedShadowRayCount();
+
+	// Stochastic RT shadow temporal accumulation + spatial denoise (REQUIRED for a usable 1-ray/pixel result).
+	// Mirror the AO temporal/denoise family. Accessors gate on ShadowsRTActive().
+	extern CVar<bool> ShadowTemporal;
+	extern CVar<float> ShadowTemporalBlend;
+	extern CVar<float> ShadowTemporalMaxBlend;
+	extern CVar<bool> ShadowDenoise;
+	extern CVar<int> ShadowDenoiseIterations;
+	extern CVar<float> ShadowDenoiseVariance;
+	// RT shadow technique within mode 2: OFF (default) = per-light inline RT shadows (#118, sharp, higher
+	// quality at low light count); ON = the half-res stochastic aggregate-ratio pass (MegaLights-lite, scales
+	// to many lights but noisier at ~10). Prefer ShadowStochasticActive().
+	extern CVar<bool> ShadowStochastic;
+	[[nodiscard]] bool ShadowStochasticActive();
+	// NRD SIGMA-style penumbra-aware à-trous kernel sizing (shadows only): scale the tap stride by the
+	// receiver's occluder distance so contact shadows stay sharp and soft penumbrae blur wide. 0 = off.
+	extern CVar<float> ShadowDenoisePenumbra;
+
+	// Log(1+luma) perceptual light-importance weighting for the stochastic shadow reservoir (else linear luma):
+	// stops a strong occluded light from dominating selection and darkening a pixel a weaker visible light lights.
+	extern CVar<bool> ShadowImportanceLog;
+
+	// Temporal neighborhood clamp for the stochastic shadow signal: off by default (the clamp clips the HDR RIS
+	// estimate's rare bright samples, darkening multi-light overlaps). GI/AO/reflections keep it on regardless.
+	extern CVar<bool> ShadowDenoiseClamp;
+	[[nodiscard]] bool ShadowTemporalActive();
+	[[nodiscard]] bool ShadowDenoiseActive();
+	[[nodiscard]] int ClampedShadowDenoiseIterations();
+
 	// RT soft-shadow light sizes (#118): the sun's angular diameter (degrees; real sun ~0.53) and a local
 	// light's physical source radius (world units). Larger => wider penumbra. Only used by the RT soft path.
 	extern CVar<float> ShadowSunAngleDeg;
@@ -315,6 +372,10 @@ namespace Snowstorm::CVars
 	// #163: fade the un-occluded env-cube SPECULAR ambient by roughness when RT GI is active (0 = off, 1 =
 	// full). Corrects the RT-GI-on shadow over-fill that the path-traced reference exposed.
 	extern CVar<float> GISpecAmbientFade;
+
+	// #39: scale on the un-occluded IBL ambient injected at each RT-GI secondary hit (0..1). Full ambient
+	// per bounce double-counts the sky and over-fills shadows vs the path-traced reference; lower = closer.
+	extern CVar<float> GIBounceAmbient;
 
 	// Ambient-occlusion technique (#151), a mode CVar (mirrors render.shadows.mode) for a clean thesis A/B:
 	// 0 = Off, 1 = SSAO (screen-space, any GPU), 2 = RT (hardware ray query, RT GPU only). Both techniques
