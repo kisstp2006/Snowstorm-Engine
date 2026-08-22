@@ -424,10 +424,13 @@ namespace Snowstorm
 		section("Scene Hierarchy");
 		if (ImGui::BeginTable("hier", 2, tableFlags))
 		{
-			row("Delete", "Delete the selected entity");
+			row("Delete", "Delete the selected entity (and its children)");
+			row("Drag row onto row", "Parent the dragged entity under the target (keeps its world pose)");
+			row("Drag row onto empty space", "Detach the entity to the scene root");
+			row("Right-click > Unparent", "Detach the entity to the scene root");
 			row("Right-click > Rename", "Rename the entity");
-			row("Right-click > Duplicate", "Duplicate the entity");
-			row("Right-click > Delete", "Delete the entity");
+			row("Right-click > Duplicate", "Duplicate the entity with its children");
+			row("Right-click > Delete", "Delete the entity with its children");
 			ImGui::EndTable();
 		}
 

@@ -13,7 +13,12 @@
 #include "Snowstorm/World/SceneSerializer.hpp"
 #include "Snowstorm/World/World.hpp"
 
+#include "Singletons/EditorCommands.hpp"
+#include "Singletons/EditorHistorySingleton.hpp"
+
 #include <nlohmann/json.hpp>
+
+#include <algorithm>
 
 using namespace Snowstorm;
 
@@ -200,4 +205,57 @@ TEST_CASE("Quaternion rotation survives a JSON round-trip", "[serialize]")
 	REQUIRE(deg.x == Catch::Approx(10.0f).margin(1e-3f));
 	REQUIRE(deg.y == Catch::Approx(20.0f).margin(1e-3f));
 	REQUIRE(deg.z == Catch::Approx(30.0f).margin(1e-3f));
+}
+
+TEST_CASE("ReparentCommand undo/redo keeps the world pose on both sides", "[hierarchy][editor]")
+{
+	World world;
+	Entity parent = MakeTransformEntity(world, "P", {10, 0, 0}, QuatFromEulerDegrees({0, 90, 0}));
+	Entity child = MakeTransformEntity(world, "C", {1, 2, 3});
+	const glm::mat4 worldBefore = world.ComputeWorldMatrix(child);
+
+	REQUIRE(world.SetParent(child, parent, true));
+	EditorHistorySingleton history;
+	history.Push(CreateRef<ReparentCommand>(child.GetComponent<IDComponent>().Id, Snowstorm::UUID{0}, parent.GetComponent<IDComponent>().Id));
+
+	history.Undo(world);
+	REQUIRE_FALSE(world.GetParent(child));
+	REQUIRE(MatNear(world.ComputeWorldMatrix(child), worldBefore));
+
+	history.Redo(world);
+	REQUIRE(world.GetParent(child) == parent);
+	REQUIRE(MatNear(world.ComputeWorldMatrix(child), worldBefore));
+}
+
+TEST_CASE("DeleteEntityCommand restores the whole subtree with its links", "[hierarchy][editor]")
+{
+	World world;
+	Entity parent = MakeTransformEntity(world, "P", {1, 0, 0});
+	Entity child = MakeTransformEntity(world, "C", {0, 1, 0});
+	world.SetParent(child, parent, false);
+	const Snowstorm::UUID pid = parent.GetComponent<IDComponent>().Id;
+	const Snowstorm::UUID cid = child.GetComponent<IDComponent>().Id;
+
+	nlohmann::json snapshot = nlohmann::json::array();
+	SceneSerializer::SerializeSubtree(parent, snapshot);
+	REQUIRE(snapshot.size() == 2);
+
+	EditorHistorySingleton history;
+	world.DestroyEntity(parent);
+	world.FlushDestroyQueue();
+	history.Push(CreateRef<DeleteEntityCommand>(pid, snapshot));
+	REQUIRE_FALSE(world.FindEntityByUUID(cid).IsValid());
+
+	history.Undo(world);
+	const Entity p = world.FindEntityByUUID(pid);
+	const Entity c = world.FindEntityByUUID(cid);
+	REQUIRE(p.IsValid());
+	REQUIRE(c.IsValid());
+	REQUIRE(world.GetParent(c) == p);
+	REQUIRE(glm::vec3(world.ComputeWorldMatrix(c)[3]) == glm::vec3(1, 1, 0));
+
+	history.Redo(world);
+	world.FlushDestroyQueue();
+	REQUIRE_FALSE(world.FindEntityByUUID(pid).IsValid());
+	REQUIRE_FALSE(world.FindEntityByUUID(cid).IsValid());
 }

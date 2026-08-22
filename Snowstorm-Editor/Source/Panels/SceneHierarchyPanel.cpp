@@ -1,6 +1,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <imgui.h>
+#include <imgui_internal.h> // BeginDragDropTargetCustom (root drop on empty panel space)
 #include <rttr/registration.h>
 
 #include <cmath>
@@ -185,12 +186,13 @@ namespace Snowstorm
 		m_World->GetSingleton<EditorSelectionSingleton>().SelectEntity(entity);
 	}
 
-	Entity SceneHierarchyPanel::DuplicateEntity(const Entity src) const
+	Entity SceneHierarchyPanel::DuplicateEntity(const Entity src, const Entity parent, const bool rename) const
 	{
-		const std::string name = src.GetComponent<TagComponent>().Tag + " (Copy)";
+		const std::string name = src.GetComponent<TagComponent>().Tag + (rename ? " (Copy)" : "");
 		Entity dst = m_World->CreateEntity(name); // fresh IDComponent UUID + TagComponent
 
-		// Copy every registered component except identity/name (those are set by CreateEntity).
+		// Copy every registered component except identity/name (those are set by CreateEntity). Hierarchy
+		// links and derived state are not Copyable; the clone is linked explicitly below.
 		for (const auto& info : GetComponentRegistry())
 		{
 			if (!info.CopyFn || !info.Type.is_valid())
@@ -204,6 +206,15 @@ namespace Snowstorm
 			}
 			info.CopyFn(src, dst);
 		}
+
+		// Same parent as the source (or the given one for recursive clones); local values already copied.
+		const Entity targetParent = parent ? parent : m_World->GetParent(src);
+		if (targetParent && dst.HasComponent<TransformComponent>())
+		{
+			m_World->SetParent(dst, targetParent, /*keepWorld*/ false);
+		}
+		m_World->ForEachChild(src, [&](const Entity child)
+		                      { DuplicateEntity(child, dst, /*rename*/ false); });
 		return dst;
 	}
 
@@ -352,7 +363,22 @@ namespace Snowstorm
 		for (const entt::entity e : view)
 		{
 			Entity entity{e, m_World};
+			if (m_World->GetParent(entity))
+			{
+				continue; // drawn under its parent
+			}
 			DrawEntityNode(entity);
+		}
+
+		// Dropping onto empty panel space detaches the dragged entity to the scene root.
+		if (ImGui::BeginDragDropTargetCustom(ImGui::GetCurrentWindow()->InnerRect, ImGui::GetID("##rootdrop")))
+		{
+			if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("SS_ENTITY"))
+			{
+				m_PendingReparent = {Entity{*static_cast<const entt::entity*>(payload->Data), m_World}, Entity{}};
+				m_HasPendingReparent = true;
+			}
+			ImGui::EndDragDropTarget();
 		}
 
 		// Right-click empty hierarchy space -> the same Create menu (Unity/Unreal both do this). Window
@@ -375,6 +401,22 @@ namespace Snowstorm
 		// ---- Apply deferred actions after the view iteration above ----
 		auto& history = m_World->GetSingleton<EditorHistorySingleton>();
 
+		if (m_HasPendingReparent)
+		{
+			m_HasPendingReparent = false;
+			const auto [child, parent] = m_PendingReparent;
+			if (child && child.HasComponent<TransformComponent>() && child.HasComponent<IDComponent>())
+			{
+				const Entity oldParent = m_World->GetParent(child);
+				if (oldParent != parent && m_World->SetParent(child, parent, /*keepWorld*/ true))
+				{
+					history.Push(CreateRef<ReparentCommand>(child.GetComponent<IDComponent>().Id,
+					                                        oldParent ? oldParent.GetComponent<IDComponent>().Id : UUID{0},
+					                                        parent ? parent.GetComponent<IDComponent>().Id : UUID{0}));
+				}
+			}
+			m_PendingReparent = {};
+		}
 		if (m_PendingDuplicate)
 		{
 			const Entity dup = DuplicateEntity(m_PendingDuplicate);
@@ -392,9 +434,10 @@ namespace Snowstorm
 				SetSelected({});
 			}
 			// Snapshot before destroying so the delete can be undone (restores same UUID/identity).
-			nlohmann::json snapshot;
+			nlohmann::json snapshot = nlohmann::json::array();
 			const UUID uuid = m_PendingDelete.GetComponent<IDComponent>().Id;
-			if (SceneSerializer::SerializeEntity(m_PendingDelete, snapshot) && cmds.DeleteEntity)
+			SceneSerializer::SerializeSubtree(m_PendingDelete, snapshot);
+			if (!snapshot.empty() && cmds.DeleteEntity)
 			{
 				cmds.DeleteEntity(m_PendingDelete); // deferred destroy at end of frame
 				history.Push(CreateRef<DeleteEntityCommand>(uuid, std::move(snapshot)));
@@ -462,14 +505,41 @@ namespace Snowstorm
 	{
 		const auto& tag = entity.GetComponent<TagComponent>().Tag;
 
-		ImGuiTreeNodeFlags flags = ((GetSelected() == entity) ? ImGuiTreeNodeFlags_Selected : 0) | ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_Leaf;
+		bool hasChildren = false;
+		m_World->ForEachChild(entity, [&](Entity)
+		                      { hasChildren = true; });
+
+		ImGuiTreeNodeFlags flags = ((GetSelected() == entity) ? ImGuiTreeNodeFlags_Selected : 0) | ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_DefaultOpen;
+		if (!hasChildren)
+		{
+			flags |= ImGuiTreeNodeFlags_Leaf;
+		}
 
 		const bool opened = ImGui::TreeNodeEx(reinterpret_cast<void*>(static_cast<uintptr_t>(static_cast<uint32_t>(entity))),
 		                                      flags,
 		                                      "%s", tag.c_str());
-		if (ImGui::IsItemClicked())
+		if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen())
 		{
 			SetSelected(entity);
+		}
+
+		// Drag a row onto another row to parent it there (Unity/Unreal/Godot hierarchy convention). The
+		// drop is deferred to after the tree walk so re-linking never invalidates the iteration.
+		if (entity.HasComponent<TransformComponent>() && ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceNoHoldToOpenOthers))
+		{
+			const entt::entity handle = entity.Handle();
+			ImGui::SetDragDropPayload("SS_ENTITY", &handle, sizeof(handle));
+			ImGui::TextUnformatted(tag.c_str());
+			ImGui::EndDragDropSource();
+		}
+		if (entity.HasComponent<TransformComponent>() && ImGui::BeginDragDropTarget())
+		{
+			if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("SS_ENTITY"))
+			{
+				m_PendingReparent = {Entity{*static_cast<const entt::entity*>(payload->Data), m_World}, entity};
+				m_HasPendingReparent = true;
+			}
+			ImGui::EndDragDropTarget();
 		}
 
 		// Double-click focuses the camera on the entity (same as pressing F with it selected).
@@ -493,6 +563,11 @@ namespace Snowstorm
 			{
 				m_PendingDuplicate = entity;
 			}
+			if (m_World->GetParent(entity) && ImGui::MenuItem("Unparent"))
+			{
+				m_PendingReparent = {entity, Entity{}};
+				m_HasPendingReparent = true;
+			}
 			ImGui::Separator();
 			// Structural entities (viewport, cameras) can't be deleted — show the item disabled.
 			if (ImGui::MenuItem("Delete", nullptr, false, IsDeletable(entity)))
@@ -504,6 +579,8 @@ namespace Snowstorm
 
 		if (opened)
 		{
+			m_World->ForEachChild(entity, [&](const Entity child)
+			                      { DrawEntityNode(child); });
 			ImGui::TreePop();
 		}
 	}

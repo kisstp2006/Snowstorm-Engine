@@ -13,6 +13,7 @@
 #include "Snowstorm/Math/CameraFraming.hpp"
 #include "Snowstorm/Render/Mesh.hpp"
 
+#include <functional>
 #include <limits>
 
 namespace Snowstorm
@@ -73,7 +74,27 @@ namespace Snowstorm
 
 	bool ComputeEntityRenderableAABB(World& world, const entt::entity entity, AABB& out)
 	{
-		return EntityAABB(world, entity, out);
+		// Union over the subtree: framing a parent (an imported model's root, a light rig) frames
+		// everything under it, like Unity's "F" on a GameObject with children.
+		AABB acc{glm::vec3(std::numeric_limits<float>::max()), glm::vec3(std::numeric_limits<float>::lowest())};
+		bool any = false;
+		std::function<void(Entity)> visit = [&](const Entity e)
+		{
+			AABB box;
+			if (EntityAABB(world, e.Handle(), box))
+			{
+				acc.Min = glm::min(acc.Min, box.Min);
+				acc.Max = glm::max(acc.Max, box.Max);
+				any = true;
+			}
+			world.ForEachChild(e, visit);
+		};
+		visit(Entity{entity, &world});
+		if (any)
+		{
+			out = acc;
+		}
+		return any;
 	}
 
 	void FramePrimaryCameraOnAABB(World& world, const AABB& bounds, const bool adjustClipPlanes)

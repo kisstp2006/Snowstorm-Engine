@@ -7,6 +7,8 @@
 #include "Snowstorm/Components/MeshComponent.hpp"
 #include "Snowstorm/Components/RenderTargetComponent.hpp"
 #include "Snowstorm/Components/TransformComponent.hpp"
+#include "Snowstorm/Components/WorldTransformComponent.hpp"
+#include "Snowstorm/Math/Transform.hpp"
 #include "Snowstorm/Components/ViewportComponent.hpp"
 #include "Snowstorm/Components/ViewportInteractionComponent.hpp"
 #include "Snowstorm/Components/IDComponent.hpp"
@@ -42,6 +44,23 @@ namespace Snowstorm
 {
 	namespace
 	{
+		// World matrix / position for overlays drawn in the UI phase: the per-frame cache from the last
+		// Resolve (at most one frame stale, fine for icons/outlines/picking; the gizmo uses the exact
+		// World::ComputeWorldMatrix instead so its manipulation never feeds back a stale matrix).
+		glm::mat4 CachedWorldMatrix(TrackedRegistry& reg, const entt::entity e)
+		{
+			if (const auto* wt = reg.try_get_const<WorldTransformComponent>(e))
+			{
+				return wt->LocalToWorld;
+			}
+			return reg.Read<TransformComponent>(e).GetTransformMatrix();
+		}
+
+		glm::vec3 CachedWorldPosition(TrackedRegistry& reg, const entt::entity e)
+		{
+			return glm::vec3(CachedWorldMatrix(reg, e)[3]);
+		}
+
 		// Constant screen radius (px) of a light's billboard icon -- the little disc drawn at the light's
 		// origin. It's BOTH the visible marker and the click hitbox, so "what you see is what you click"
 		// (Unreal/Unity icon picking). Drawing and PickEntity share this constant so they never drift.
@@ -94,15 +113,15 @@ namespace Snowstorm
 
 			for (auto pv = reg.view<const PointLightComponent, const TransformComponent>(); const entt::entity e : pv)
 			{
-				tryPickLightAt(reg.Read<TransformComponent>(e).Position, e);
+				tryPickLightAt(CachedWorldPosition(reg, e), e);
 			}
 			for (auto sv = reg.view<const SpotLightComponent, const TransformComponent>(); const entt::entity e : sv)
 			{
-				tryPickLightAt(reg.Read<TransformComponent>(e).Position, e);
+				tryPickLightAt(CachedWorldPosition(reg, e), e);
 			}
 			for (auto dv = reg.view<const DirectionalLightComponent, const TransformComponent>(); const entt::entity e : dv)
 			{
-				tryPickLightAt(reg.Read<TransformComponent>(e).Position, e);
+				tryPickLightAt(CachedWorldPosition(reg, e), e);
 			}
 			return lightHit;
 		}
@@ -132,7 +151,7 @@ namespace Snowstorm
 					continue; // not yet resolved -> no bounds to test
 				}
 
-				const glm::mat4 model = reg.Read<TransformComponent>(e).GetTransformMatrix();
+				const glm::mat4 model = CachedWorldMatrix(reg, e);
 				const AABB worldBox = TransformAABB(mc.MeshInstance->GetBounds().Box, model);
 
 				if (const auto t = RayIntersectsAABB(ray, worldBox); t && *t < bestT)
@@ -303,7 +322,7 @@ namespace Snowstorm
 			     const entt::entity e : view)
 			{
 				const auto& light = reg.Read<PointLightComponent>(e);
-				const glm::vec3 pos = reg.Read<TransformComponent>(e).Position;
+				const glm::vec3 pos = CachedWorldPosition(reg, e);
 				const bool isSelected = e == selectedHandle;
 				const ImU32 col = LightGizmoColor(light.Color, isSelected);
 				DrawLightIcon(dl, pos, viewProj, rectMin, rectSize, col, LightIconKind::Point);
@@ -319,8 +338,8 @@ namespace Snowstorm
 			     const entt::entity e : view)
 			{
 				const auto& light = reg.Read<SpotLightComponent>(e);
-				const auto& transform = reg.Read<TransformComponent>(e);
-				const glm::vec3 apex = transform.Position;
+				const glm::mat4 spotWorld = CachedWorldMatrix(reg, e);
+				const glm::vec3 apex = glm::vec3(spotWorld[3]);
 				const bool isSelected = e == selectedHandle;
 				const ImU32 col = LightGizmoColor(light.Color, isSelected);
 
@@ -331,7 +350,7 @@ namespace Snowstorm
 					continue; // cone wireframe only for the selected light
 				}
 
-				const glm::mat3 rot = glm::mat3(transform.GetTransformMatrix());
+				const glm::mat3 rot = glm::mat3(spotWorld);
 				const glm::vec3 dir = glm::normalize(rot * glm::vec3(0, 0, -1)); // engine forward = -Z
 				// Basis spanning the cone's base plane (any two axes orthogonal to dir).
 				glm::vec3 up = std::abs(dir.y) > 0.99f ? glm::vec3(1, 0, 0) : glm::vec3(0, 1, 0);
@@ -357,7 +376,7 @@ namespace Snowstorm
 			     const entt::entity e : view)
 			{
 				const auto& light = reg.Read<DirectionalLightComponent>(e);
-				const glm::vec3 pos = reg.Read<TransformComponent>(e).Position;
+				const glm::vec3 pos = CachedWorldPosition(reg, e);
 				const bool isSelected = e == selectedHandle;
 				const ImU32 col = LightGizmoColor(light.Color, isSelected);
 				DrawLightIcon(dl, pos, viewProj, rectMin, rectSize, col, LightIconKind::Directional);
@@ -555,7 +574,12 @@ namespace Snowstorm
 			if (selected && selected.HasComponent<TransformComponent>())
 			{
 				gizmoDrawn = true;
-				glm::mat4 model = selected.GetComponent<TransformComponent>().GetTransformMatrix();
+				// Manipulate in WORLD space (exact matrix, not the per-frame cache), then convert the result back
+				// into the entity's LOCAL transform through the parent's inverse so children of a moved parent
+				// and parented entities both edit correctly.
+				glm::mat4 model = m_World->ComputeWorldMatrix(selected);
+				const Entity parentEntity = m_World->GetParent(selected);
+				const glm::mat4 parentWorld = parentEntity ? m_World->ComputeWorldMatrix(parentEntity) : glm::mat4(1.0f);
 
 				if (ImGuizmo::Manipulate(glm::value_ptr(camRt.View), glm::value_ptr(camRt.Projection),
 				                         static_cast<ImGuizmo::OPERATION>(m_GizmoOp), ImGuizmo::WORLD,
@@ -565,7 +589,7 @@ namespace Snowstorm
 					// quaternion, so there is no Euler-order round trip to get wrong).
 					glm::vec3 scale, translation;
 					glm::quat rotation;
-					if (DecomposeTRS(model, translation, rotation, scale))
+					if (DecomposeTRS(glm::inverse(parentWorld) * model, translation, rotation, scale))
 					{
 						selected.PatchComponent<TransformComponent>([&](TransformComponent& t)
 						                                            {

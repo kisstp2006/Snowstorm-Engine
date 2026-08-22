@@ -43,8 +43,10 @@ namespace Snowstorm
 			return;
 		}
 
-		// Snapshot the full entity so Redo can bring it back exactly as it is now.
-		SceneSerializer::SerializeEntity(e, m_Snapshot);
+		// Snapshot the full subtree so Redo can bring it back exactly as it is now (DestroyEntity
+		// takes the children with it).
+		m_Snapshot = nlohmann::json::array();
+		SceneSerializer::SerializeSubtree(e, m_Snapshot);
 		world.DestroyEntity(e);
 	}
 
@@ -54,7 +56,7 @@ namespace Snowstorm
 		{
 			return; // first Redo after a normal Push never happens (the create already applied)
 		}
-		SceneSerializer::DeserializeEntity(world, m_Snapshot);
+		SceneSerializer::DeserializeEntities(world, m_Snapshot);
 	}
 
 	// ---- DeleteEntityCommand -------------------------------------------------------------------------
@@ -63,7 +65,7 @@ namespace Snowstorm
 	{
 		if (!m_Snapshot.is_null())
 		{
-			SceneSerializer::DeserializeEntity(world, m_Snapshot);
+			SceneSerializer::DeserializeEntities(world, m_Snapshot);
 		}
 	}
 
@@ -74,6 +76,32 @@ namespace Snowstorm
 		{
 			world.DestroyEntity(e);
 		}
+	}
+
+	// ---- ReparentCommand -----------------------------------------------------------------------------
+
+	namespace
+	{
+		void ApplyParent(World& world, const UUID child, const UUID parent)
+		{
+			const Entity c = world.FindEntityByUUID(child);
+			if (!c)
+			{
+				return;
+			}
+			const Entity p = parent.Value() != 0 ? world.FindEntityByUUID(parent) : Entity{};
+			world.SetParent(c, p, /*keepWorld*/ true);
+		}
+	}
+
+	void ReparentCommand::Undo(World& world)
+	{
+		ApplyParent(world, m_Target, m_OldParent);
+	}
+
+	void ReparentCommand::Redo(World& world)
+	{
+		ApplyParent(world, m_Target, m_NewParent);
 	}
 
 	// ---- ComponentEditCommand ------------------------------------------------------------------------

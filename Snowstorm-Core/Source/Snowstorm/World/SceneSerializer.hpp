@@ -31,6 +31,13 @@ namespace Snowstorm
 		// undone delete returns with its original identity). Returns the new Entity (invalid on failure).
 		static Entity DeserializeEntity(World& world, const nlohmann::json& in);
 
+		// Subtree (entity + descendants, parent-first) as a JSON array, and its inverse. The array form is
+		// what undo/redo snapshots and clipboard-style operations want: a delete of a parent takes its
+		// children with it, so restoring it must bring them back too. Parents are re-linked after every
+		// entity exists (the array may list a child before its parent).
+		static void SerializeSubtree(Entity root, nlohmann::json& outArray);
+		static void DeserializeEntities(World& world, const nlohmann::json& array);
+
 	private:
 		// Attach `entity` under the "Parent" UUID in `in` if that entity exists; true when done or no parent.
 		static bool ResolveParent(World& world, Entity entity, const nlohmann::json& in);

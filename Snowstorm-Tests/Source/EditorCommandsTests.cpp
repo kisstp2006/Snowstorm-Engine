@@ -140,9 +140,10 @@ TEST_CASE("DeleteEntityCommand undo restores snapshot, redo deletes again", "[ed
 	e.AddComponent<TransformComponent>().Position = glm::vec3(9.0f);
 	const UUID id = e.GetComponent<IDComponent>().Id;
 
-	// Mirror the hierarchy panel: snapshot, then destroy, then push the command.
-	nlohmann::json snap;
-	REQUIRE(SceneSerializer::SerializeEntity(e, snap));
+	// Mirror the hierarchy panel: snapshot the subtree, then destroy, then push the command.
+	nlohmann::json snap = nlohmann::json::array();
+	SceneSerializer::SerializeSubtree(e, snap);
+	REQUIRE(snap.size() == 1);
 	world.DestroyEntity(e);
 	world.FlushDestroyQueue();
 

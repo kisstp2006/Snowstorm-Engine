@@ -319,6 +319,47 @@ namespace Snowstorm
 		return entity;
 	}
 
+	void SceneSerializer::SerializeSubtree(const Entity root, json& outArray)
+	{
+		if (!outArray.is_array())
+		{
+			outArray = json::array();
+		}
+		json entJ;
+		if (SerializeEntity(root, entJ))
+		{
+			outArray.push_back(std::move(entJ));
+		}
+		root.GetWorld()->ForEachChild(root, [&](const Entity child)
+		                              { SerializeSubtree(child, outArray); });
+	}
+
+	void SceneSerializer::DeserializeEntities(World& world, const json& array)
+	{
+		if (!array.is_array())
+		{
+			return;
+		}
+		std::vector<std::pair<Entity, const json*>> unresolved;
+		for (const auto& entJ : array)
+		{
+			Entity entity = DeserializeEntity(world, entJ);
+			if (entJ.contains("Parent") && !world.GetParent(entity))
+			{
+				unresolved.emplace_back(entity, &entJ);
+			}
+		}
+		// Second pass: parents that appeared later in the array than their children.
+		for (const auto& [entity, entJ] : unresolved)
+		{
+			if (!ResolveParent(world, entity, *entJ))
+			{
+				SS_CORE_WARN("SceneSerializer: entity '{}' references a missing parent {}; left at root.",
+				             entity.GetComponent<TagComponent>().Tag, (*entJ)["Parent"].get<std::string>());
+			}
+		}
+	}
+
 	std::string SceneSerializer::SerializeToString(const World& world)
 	{
 		json root;
@@ -382,25 +423,7 @@ namespace Snowstorm
 			return false;
 		}
 
-		std::vector<std::pair<Entity, const json*>> unresolved;
-		for (const auto& entJ : root["Entities"])
-		{
-			Entity entity = DeserializeEntity(world, entJ);
-			if (entJ.contains("Parent") && !world.GetParent(entity))
-			{
-				unresolved.emplace_back(entity, &entJ);
-			}
-		}
-		// Second pass: parents that appeared later in the file than their children.
-		for (const auto& [entity, entJ] : unresolved)
-		{
-			if (!ResolveParent(world, entity, *entJ))
-			{
-				SS_CORE_WARN("SceneSerializer: entity '{}' references a missing parent {}; left at root.",
-				             entity.GetComponent<TagComponent>().Tag, (*entJ)["Parent"].get<std::string>());
-			}
-		}
-
+		DeserializeEntities(world, root["Entities"]);
 		return true;
 	}
 

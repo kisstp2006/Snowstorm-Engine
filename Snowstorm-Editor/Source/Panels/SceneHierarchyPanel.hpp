@@ -24,13 +24,17 @@ namespace Snowstorm
 		[[nodiscard]] Entity GetSelected() const;
 		void SetSelected(Entity entity) const;
 
-		Entity DuplicateEntity(Entity src) const;
+		// Clones `src` and its subtree. `parent` overrides the clone's parent (recursive calls); `rename`
+		// appends " (Copy)" (top-level only).
+		Entity DuplicateEntity(Entity src, Entity parent = {}, bool rename = true) const;
 
 		World* m_World{};
 
 		// Deferred per-frame actions so we never mutate the ECS while iterating the hierarchy view.
 		Entity m_PendingDelete;
 		Entity m_PendingDuplicate;
+		std::pair<Entity, Entity> m_PendingReparent; // (child, new parent or invalid = root)
+		bool m_HasPendingReparent = false;
 		Entity m_RenameTarget;
 		char m_RenameBuffer[256] = {};
 		bool m_OpenRenamePopup = false;

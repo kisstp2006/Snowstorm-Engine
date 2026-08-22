@@ -71,6 +71,26 @@ namespace Snowstorm
 		nlohmann::json m_Snapshot;
 	};
 
+	// Hierarchy drag&drop: the entity moved from one parent to another (0 = scene root). Both sides go
+	// through World::SetParent with keep-world, so the entity stays put on screen in either direction.
+	class ReparentCommand final : public EditorCommand
+	{
+	public:
+		ReparentCommand(const UUID target, const UUID oldParent, const UUID newParent)
+		    : m_Target(target), m_OldParent(oldParent), m_NewParent(newParent)
+		{
+		}
+
+		void Undo(World& world) override;
+		void Redo(World& world) override;
+		[[nodiscard]] const char* Name() const override { return "Reparent"; }
+
+	private:
+		UUID m_Target;
+		UUID m_OldParent;
+		UUID m_NewParent;
+	};
+
 	// A generic inspector edit of one component on one entity. Stores the component's serialized JSON
 	// before and after the edit, and applies whichever side by deserializing it onto the live component.
 	// Used for property edits (RTTR) where capturing typed before/after per property would be unwieldy;
