@@ -21,6 +21,7 @@ namespace Snowstorm
 		JPH::RefConst<JPH::Shape> Shape;
 		uint64_t AuthoredHash = 0;
 		bool Dynamic = false;
+		bool Activated = false; // woken once the simulation runs (bodies made in Edit mode start asleep)
 
 		// Previous fixed-step pose, for render interpolation between steps (RigidBodyComponent::Interpolate).
 		glm::vec3 PrevPosition{0.0f};

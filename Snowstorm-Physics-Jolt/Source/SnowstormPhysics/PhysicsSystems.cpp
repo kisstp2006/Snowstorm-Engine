@@ -380,6 +380,7 @@ namespace Snowstorm
 		runtime.Shape = shape;
 		runtime.AuthoredHash = hash;
 		runtime.Dynamic = joltMotion == JPH::EMotionType::Dynamic;
+		runtime.Activated = moving && simulating;
 		runtime.HasPrev = false;
 	}
 
@@ -484,13 +485,19 @@ namespace Snowstorm
 		auto& bodies = physics.Bodies();
 		const float dt = ts.GetSeconds();
 
-		// Previous-pose snapshot (interpolation) + kinematic targets from the authored transforms.
+		// Previous-pose snapshot (interpolation) + kinematic targets from the authored transforms. Bodies
+		// created in Edit mode were added asleep: wake every dynamic one the first time we simulate it.
 		for (const auto view = reg.view<PhysicsBodyRuntimeComponent>(); const entt::entity e : view)
 		{
 			auto& rt = reg.get<PhysicsBodyRuntimeComponent>(e);
 			if (rt.Body.IsInvalid())
 			{
 				continue;
+			}
+			if (rt.Dynamic && !rt.Activated)
+			{
+				bodies.ActivateBody(rt.Body);
+				rt.Activated = true;
 			}
 			if (rt.Dynamic)
 			{
@@ -507,16 +514,6 @@ namespace Snowstorm
 				glm::quat rot;
 				DecomposeTRS(reg.Read<WorldTransformComponent>(e).LocalToWorld, pos, rot, s);
 				bodies.MoveKinematic(rt.Body, ToJolt(pos), ToJolt(rot), dt);
-			}
-		}
-
-		// Bodies created in Edit mode were added asleep; wake the moving ones now that we simulate.
-		for (const auto view = reg.view<PhysicsBodyRuntimeComponent>(); const entt::entity e : view)
-		{
-			const auto& rt = reg.Read<PhysicsBodyRuntimeComponent>(e);
-			if (rt.Dynamic && !rt.HasPrev)
-			{
-				bodies.ActivateBody(rt.Body);
 			}
 		}
 

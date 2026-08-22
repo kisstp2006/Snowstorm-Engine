@@ -8,6 +8,7 @@
 #include "Snowstorm/Scripting/ScriptEvents.hpp"
 #include "Snowstorm/Systems/TransformSystem.hpp"
 #include "Snowstorm/World/Entity.hpp"
+#include "Snowstorm/World/SimulationStateSingleton.hpp"
 #include "Snowstorm/World/World.hpp"
 
 #include "SnowstormPhysics/Components/PhysicsBodyRuntimeComponent.hpp"
@@ -138,4 +139,22 @@ TEST_CASE("The collision matrix gates contacts and the script event queue receiv
 	}
 	REQUIRE(solidHitFloor);
 	REQUIRE(solid.GetComponent<TransformComponent>().Position.y == Catch::Approx(-1.375f).margin(0.05f));
+}
+
+TEST_CASE("Bodies authored in Edit mode all wake up when Play starts", "[physics]")
+{
+	PhysicsWorld pw;
+	pw.W.GetSingletonManager().RegisterSingleton<SimulationStateSingleton>(); // Edit mode
+	pw.Box("Floor", {0, -2, 0}, {10, 0.25f, 10}, MotionType::Static);
+	Entity a = pw.Box("A", {0, 4, 0}, {1, 1, 1}, MotionType::Dynamic);
+	Entity b = pw.Box("B", {3, 4, 0}, {1, 1, 1}, MotionType::Dynamic);
+	pw.Step(30); // Edit mode: bodies exist (debug draw) but nothing moves
+	REQUIRE(a.HasComponent<PhysicsBodyRuntimeComponent>());
+	REQUIRE(a.GetComponent<TransformComponent>().Position.y == Catch::Approx(4.0f));
+
+	pw.W.GetSingleton<SimulationStateSingleton>().Current = SimulationStateSingleton::Mode::Play;
+	pw.Step(240);
+	// Both fell — not just the one that happened to be touched last.
+	REQUIRE(a.GetComponent<TransformComponent>().Position.y < 0.0f);
+	REQUIRE(b.GetComponent<TransformComponent>().Position.y < 0.0f);
 }
