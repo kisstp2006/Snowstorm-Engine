@@ -1,16 +1,12 @@
 #include "SkinnedMeshImporter.hpp"
 
-#include "Snowstorm/Core/Log.hpp"
-
 #include <assimp/postprocess.h>
 #include <assimp/scene.h>
 #include <assimp/Importer.hpp>
 
 #include <glm/gtc/matrix_transform.hpp>
-#include <glm/gtx/matrix_decompose.hpp>
 
 #include <algorithm>
-#include <unordered_map>
 #include <unordered_set>
 
 namespace Snowstorm
