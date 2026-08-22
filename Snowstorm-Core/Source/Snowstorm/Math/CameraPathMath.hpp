@@ -14,8 +14,8 @@ namespace Snowstorm
 	struct OrbitPose
 	{
 		glm::vec3 Position{0.0f};
-		float Yaw = 0.0f;   // radians, about world +Y — matches TransformComponent.Rotation.y
-		float Pitch = 0.0f; // radians, about camera-local right — matches TransformComponent.Rotation.x
+		float Yaw = 0.0f;   // radians, about world +Y (yaw; QuatFromPitchYaw convention)
+		float Pitch = 0.0f; // radians, about camera-local right (pitch)
 	};
 
 	// Camera pose at time `t` (seconds) for an orbit around `center`: circle of `radius` in the XZ plane at

@@ -12,6 +12,7 @@
 #include "Snowstorm/Components/CameraTargetComponent.hpp"
 #include "Snowstorm/Components/TransformComponent.hpp"
 #include "Snowstorm/Components/ViewportInteractionComponent.hpp"
+#include "Snowstorm/Math/Transform.hpp"
 
 #include "Snowstorm/Input/InputStateSingleton.hpp"
 #include "Snowstorm/Core/Application.hpp" // for cursor mode via window (see note)
@@ -165,8 +166,9 @@ namespace Snowstorm
 		// the camera already points instead of snapping to zero on the first frame.
 		if (!rtState.Initialized)
 		{
-			rtState.TargetPitch = tr.Rotation.x;
-			rtState.TargetYaw = tr.Rotation.y;
+			const glm::vec3 euler = EulerRadiansFromQuat(tr.Rotation);
+			rtState.Pitch = rtState.TargetPitch = euler.x;
+			rtState.Yaw = rtState.TargetYaw = euler.y;
 			rtState.Initialized = true;
 		}
 
@@ -194,15 +196,18 @@ namespace Snowstorm
 			rtState.TargetPitch = glm::clamp(rtState.TargetPitch, -limit, limit);
 		}
 
-		// Ease the transform's rotation toward the target (exponential smoothing).
+		// Ease the eased pitch/yaw toward the target (exponential smoothing). The runtime component owns
+		// the angles (the transform's quaternion is derived from them), so the easing is a plain scalar
+		// lerp with no Euler extraction drift.
 		{
 			const float a = SmoothAlpha(ctrl.LookSmoothing, dt);
-			tr.Rotation.x += (rtState.TargetPitch - tr.Rotation.x) * a;
-			tr.Rotation.y += (rtState.TargetYaw - tr.Rotation.y) * a;
+			rtState.Pitch += (rtState.TargetPitch - rtState.Pitch) * a;
+			rtState.Yaw += (rtState.TargetYaw - rtState.Yaw) * a;
+			tr.Rotation = QuatFromPitchYaw(rtState.Pitch, rtState.Yaw);
 		}
 
 		// Axes computed AFTER look so movement uses the (eased) current orientation.
-		const glm::vec3 forward = ForwardFromPitchYaw(tr.Rotation.x, tr.Rotation.y);
+		const glm::vec3 forward = ForwardFromPitchYaw(rtState.Pitch, rtState.Yaw);
 		const glm::vec3 right = RightFromForward(forward);
 		constexpr glm::vec3 up(0.0f, 1.0f, 0.0f);
 

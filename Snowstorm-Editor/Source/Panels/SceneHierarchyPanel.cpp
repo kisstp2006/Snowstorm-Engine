@@ -6,6 +6,7 @@
 #include <cmath>
 
 #include "SceneHierarchyPanel.hpp"
+#include "Snowstorm/Math/Transform.hpp"
 
 #include "Snowstorm/Components/CameraComponent.hpp"
 #include "Snowstorm/Components/CameraRuntimeComponent.hpp"
@@ -95,17 +96,6 @@ namespace Snowstorm
 				outPos = camPos + forward * 5.0f;
 				return;
 			}
-		}
-
-		// Convert a forward direction to a TransformComponent Euler rotation (X=pitch, Y=yaw, Z=roll) that
-		// makes the entity's -Z axis point along `forward` — matches how spot/camera forward is derived
-		// (ForwardFromPitchYaw in CameraControllerSystem). Roll is left 0.
-		glm::vec3 EulerFromForward(const glm::vec3& forward)
-		{
-			const glm::vec3 f = glm::normalize(forward);
-			const float yaw = std::atan2(-f.x, -f.z); // -Z forward convention
-			const float pitch = std::asin(glm::clamp(f.y, -1.0f, 1.0f));
-			return {pitch, yaw, 0.0f};
 		}
 
 		// The kind of glyph to draw beside a Create-menu row. These mirror the viewport light gizmo icons
@@ -283,7 +273,7 @@ namespace Snowstorm
 		};
 		const auto addSpot = [](Entity e, const glm::vec3& fwd)
 		{
-			e.GetComponentMutable_Untracked<TransformComponent>().Rotation = EulerFromForward(fwd);
+			e.GetComponentMutable_Untracked<TransformComponent>().Rotation = QuatLookingAlong(fwd);
 			auto& sl = e.AddComponent<SpotLightComponent>();
 			sl.Color = glm::vec3(1.0f);
 			sl.Intensity = 80.0f;
@@ -306,7 +296,7 @@ namespace Snowstorm
 		// the editor's own DoNotSerialize Scene-view camera — this one lives in the scene.
 		const auto addCamera = [](Entity e, const glm::vec3& fwd)
 		{
-			e.GetComponentMutable_Untracked<TransformComponent>().Rotation = EulerFromForward(fwd);
+			e.GetComponentMutable_Untracked<TransformComponent>().Rotation = QuatLookingAlong(fwd);
 			auto& cc = e.AddComponent<CameraComponent>();
 			cc.Projection = CameraComponent::ProjectionType::Perspective;
 			cc.PerspectiveFOV = 0.785398f;

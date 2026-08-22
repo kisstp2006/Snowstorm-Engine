@@ -1,7 +1,10 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>
+#include <glm/gtc/constants.hpp>
 
 #include "Snowstorm/Core/JobSystem.hpp"
 #include "Snowstorm/Systems/RotatorMath.hpp"
+#include "Snowstorm/Math/Transform.hpp"
 
 #include <cstdint>
 #include <vector>
@@ -41,7 +44,7 @@ TEST_CASE("AdvanceRotation is identical serial vs parallel (data-parallel correc
 	uint64_t rng = 20260708u;
 	for (size_t i = 0; i < count; ++i)
 	{
-		serialTr[i].Rotation = {RandFloat(rng, 0.0f, 6.28f), RandFloat(rng, 0.0f, 6.28f), RandFloat(rng, 0.0f, 6.28f)};
+		serialTr[i].Rotation = QuatFromEulerRadians({RandFloat(rng, 0.0f, 6.28f), RandFloat(rng, 0.0f, 6.28f), RandFloat(rng, 0.0f, 6.28f)});
 		rot[i].Axis = {RandFloat(rng, -1.0f, 1.0f), 1.0f, RandFloat(rng, -1.0f, 1.0f)};
 		rot[i].SpeedDegPerSec = RandFloat(rng, 15.0f, 90.0f);
 	}
@@ -76,6 +79,7 @@ TEST_CASE("AdvanceRotation is identical serial vs parallel (data-parallel correc
 		REQUIRE(serialTr[i].Rotation.x == parallelTr[i].Rotation.x);
 		REQUIRE(serialTr[i].Rotation.y == parallelTr[i].Rotation.y);
 		REQUIRE(serialTr[i].Rotation.z == parallelTr[i].Rotation.z);
+		REQUIRE(serialTr[i].Rotation.w == parallelTr[i].Rotation.w);
 	}
 }
 
@@ -84,8 +88,8 @@ TEST_CASE("AdvanceRotation is identical serial vs parallel (data-parallel correc
 TEST_CASE("AdvanceRotation leaves transform unchanged for degenerate rotators", "[ecs]")
 {
 	TransformComponent tr;
-	tr.Rotation = {0.3f, 0.6f, 0.9f};
-	const glm::vec3 before = tr.Rotation;
+	tr.Rotation = QuatFromEulerRadians({0.3f, 0.6f, 0.9f});
+	const glm::quat before = tr.Rotation;
 
 	RotatorComponent zeroAxis;
 	zeroAxis.Axis = {0.0f, 0.0f, 0.0f};
@@ -98,4 +102,23 @@ TEST_CASE("AdvanceRotation leaves transform unchanged for degenerate rotators", 
 	zeroSpeed.SpeedDegPerSec = 0.0f;
 	AdvanceRotation(tr, zeroSpeed, 1.0f / 60.0f);
 	REQUIRE(tr.Rotation == before);
+}
+
+// Euler <-> quaternion helpers are exact inverses for the YXZ convention the inspector and the camera
+// controllers use, and a 90-degree yaw turns -Z forward into -X.
+TEST_CASE("Euler/quaternion helpers round-trip (YXZ)", "[math]")
+{
+	const glm::vec3 euler{0.4f, -1.1f, 0.25f}; // pitch, yaw, roll (radians), away from gimbal lock
+	const glm::vec3 back = EulerRadiansFromQuat(QuatFromEulerRadians(euler));
+	REQUIRE(back.x == Catch::Approx(euler.x).margin(1e-5f));
+	REQUIRE(back.y == Catch::Approx(euler.y).margin(1e-5f));
+	REQUIRE(back.z == Catch::Approx(euler.z).margin(1e-5f));
+
+	const glm::vec3 fwd = ForwardFromQuat(QuatFromPitchYaw(0.0f, glm::half_pi<float>()));
+	REQUIRE(fwd.x == Catch::Approx(-1.0f).margin(1e-5f));
+	REQUIRE(fwd.z == Catch::Approx(0.0f).margin(1e-5f));
+
+	const glm::quat look = QuatLookingAlong({-1.0f, 0.0f, 0.0f});
+	const glm::vec3 lookFwd = ForwardFromQuat(look);
+	REQUIRE(lookFwd.x == Catch::Approx(-1.0f).margin(1e-5f));
 }

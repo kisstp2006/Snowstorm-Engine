@@ -1,5 +1,7 @@
 #include "CameraPathSystem.hpp"
 
+#include "Snowstorm/Math/Transform.hpp"
+
 #include "Snowstorm/Components/CameraControllerComponent.hpp"
 #include "Snowstorm/Components/CameraPathComponent.hpp"
 #include "Snowstorm/Components/TransformComponent.hpp"
@@ -50,7 +52,7 @@ namespace Snowstorm
 			// View/Projection this frame. Roll (z) stays 0 for a level horizon.
 			auto& tr = reg.Write<TransformComponent>(e);
 			tr.Position = pose.Position;
-			tr.Rotation = glm::vec3(pose.Pitch, pose.Yaw, 0.0f);
+			tr.Rotation = QuatFromPitchYaw(pose.Pitch, pose.Yaw);
 		}
 	}
 }

@@ -1,4 +1,5 @@
 #include "StressScene.hpp"
+#include "Snowstorm/Math/Transform.hpp"
 
 #include "Snowstorm/Assets/AssetManagerSingleton.hpp"
 #include "Snowstorm/Components/MaterialComponent.hpp"
@@ -32,7 +33,7 @@ namespace Snowstorm
 
 			auto& tr = e.AddComponent<TransformComponent>();
 			tr.Position = pos;
-			tr.Rotation = rot;
+			tr.Rotation = QuatFromEulerRadians(rot);
 			tr.Scale = scale;
 
 			auto& mc = e.AddComponent<MeshComponent>();
@@ -172,7 +173,7 @@ namespace Snowstorm
 
 			auto& tr = e.AddComponent<TransformComponent>();
 			tr.Position = {frand(-half, half), frand(0.0f, 8.0f), frand(-half, half)};
-			tr.Rotation = {frand(0.0f, glm::radians(360.0f)), frand(0.0f, glm::radians(360.0f)), frand(0.0f, glm::radians(360.0f))};
+			tr.Rotation = QuatFromEulerRadians({frand(0.0f, glm::radians(360.0f)), frand(0.0f, glm::radians(360.0f)), frand(0.0f, glm::radians(360.0f))});
 
 			auto& rot = e.AddComponent<RotatorComponent>();
 			rot.Axis = glm::normalize(glm::vec3(frand(-1.0f, 1.0f), 1.0f, frand(-1.0f, 1.0f)));

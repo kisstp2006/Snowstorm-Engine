@@ -12,6 +12,10 @@ namespace Snowstorm
 
 		// Target pitch/yaw (radians) the mouse drives directly; the TransformComponent's
 		// rotation is eased toward these for smooth look. Initialized from the transform.
+		// Look angles (radians). The controller owns these and writes the derived quaternion into
+		// TransformComponent; Pitch/Yaw ease toward TargetPitch/TargetYaw.
+		float Pitch = 0.0f;
+		float Yaw = 0.0f;
 		float TargetPitch = 0.0f;
 		float TargetYaw = 0.0f;
 

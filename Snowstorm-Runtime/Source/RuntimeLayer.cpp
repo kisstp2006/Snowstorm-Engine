@@ -1,4 +1,5 @@
 #include "RuntimeLayer.hpp"
+#include "Snowstorm/Math/Transform.hpp"
 
 #include "Snowstorm/Assets/AssetManagerSingleton.hpp"
 #include "Snowstorm/Core/Application.hpp"
@@ -172,7 +173,7 @@ namespace Snowstorm
 			{
 				auto& tr = reg.Write<TransformComponent>(authored);
 				tr.Position = {p[0], p[1], p[2]};
-				tr.Rotation = {p[3], p[4], p[5]};
+				tr.Rotation = QuatFromEulerRadians({p[3], p[4], p[5]});
 				SS_CORE_INFO("Runtime: camera.override pos=({:.3f},{:.3f},{:.3f}) rot=({:.3f},{:.3f},{:.3f}).",
 				             p[0], p[1], p[2], p[3], p[4], p[5]);
 			}

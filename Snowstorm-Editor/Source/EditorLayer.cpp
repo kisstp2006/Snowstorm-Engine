@@ -1202,7 +1202,7 @@ namespace Snowstorm
 		nlohmann::json j;
 		j["Version"] = 1;
 		j["Camera"]["Position"] = {tr.Position.x, tr.Position.y, tr.Position.z};
-		j["Camera"]["Rotation"] = {tr.Rotation.x, tr.Rotation.y, tr.Rotation.z};
+		j["Camera"]["Rotation"] = {tr.Rotation.x, tr.Rotation.y, tr.Rotation.z, tr.Rotation.w}; // quaternion xyzw
 
 		std::ofstream out(EditorSidecarPath(scenePath));
 		if (out.is_open())
@@ -1242,9 +1242,9 @@ namespace Snowstorm
 		{
 			tr.Position = {c["Position"][0], c["Position"][1], c["Position"][2]};
 		}
-		if (c.contains("Rotation") && c["Rotation"].is_array() && c["Rotation"].size() == 3)
+		if (c.contains("Rotation") && c["Rotation"].is_array() && c["Rotation"].size() == 4)
 		{
-			tr.Rotation = {c["Rotation"][0], c["Rotation"][1], c["Rotation"][2]};
+			tr.Rotation = glm::normalize(glm::quat(c["Rotation"][3], c["Rotation"][0], c["Rotation"][1], c["Rotation"][2]));
 		}
 
 		// The controller caches target yaw/pitch and re-seeds them from the transform only while

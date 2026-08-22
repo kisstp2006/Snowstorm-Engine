@@ -2,6 +2,7 @@
 
 #include "Snowstorm/Components/IDComponent.hpp"
 #include "Snowstorm/Math/Math.hpp"
+#include "Snowstorm/Math/Transform.hpp"
 #include "Snowstorm/Utility/JsonUtils.hpp"
 #include "Snowstorm/Utility/UUID.hpp"
 #include "Snowstorm/World/EditorHooksSingleton.hpp"
@@ -592,6 +593,17 @@ namespace Snowstorm
 			if (edited)
 			{
 				propChanged = prop.set_value(instance, val);
+			}
+		}
+		else if (type == rttr::type::get<glm::quat>())
+		{
+			// Orientation is stored as a quaternion; the inspector speaks Euler degrees (pitch, yaw, roll),
+			// the same convention Unity/Unreal/Godot show. Re-derived from the quaternion every frame.
+			glm::vec3 eulerDeg = EulerDegreesFromQuat(value.get_value<glm::quat>());
+			LabelLeft(name.c_str());
+			if (ColoredVector(hidden.c_str(), glm::value_ptr(eulerDeg), 3, 0.5f))
+			{
+				propChanged = prop.set_value(instance, QuatFromEulerDegrees(eulerDeg));
 			}
 		}
 		else if (type == rttr::type::get<glm::vec4>())

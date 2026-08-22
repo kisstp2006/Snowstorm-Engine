@@ -295,7 +295,7 @@ namespace Snowstorm
 	std::string SceneSerializer::SerializeToString(const World& world)
 	{
 		json root;
-		root["Scene"] = {{"Version", 1}, {"Name", "Untitled"}};
+		root["Scene"] = {{"Version", 2}, {"Name", "Untitled"}};
 		root["Entities"] = json::array();
 
 		auto& reg = world.GetRegistry();

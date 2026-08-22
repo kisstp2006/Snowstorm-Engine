@@ -3,6 +3,7 @@
 #include "Snowstorm/Math/Math.hpp"
 #include "Snowstorm/Utility/UUID.hpp"
 
+#include <glm/gtc/quaternion.hpp>
 #include <nlohmann/json.hpp>
 #include <rttr/registration.h>
 
@@ -102,6 +103,11 @@ namespace Snowstorm
 			return VecToJson(v.get_value<glm::vec3>());
 		if (t == rttr::type::get<glm::vec4>())
 			return VecToJson(v.get_value<glm::vec4>());
+		if (t == rttr::type::get<glm::quat>())
+		{
+			const glm::quat q = v.get_value<glm::quat>();
+			return json::array({q.x, q.y, q.z, q.w}); // [x, y, z, w]
+		}
 
 		if (t.is_enumeration())
 		{
@@ -221,6 +227,13 @@ namespace Snowstorm
 			if (!JsonToVec(j, v))
 				return false;
 			out = v;
+			return true;
+		}
+		if (t == rttr::type::get<glm::quat>())
+		{
+			if (!j.is_array() || j.size() != 4)
+				return false;
+			out = glm::normalize(glm::quat(j[3].get<float>(), j[0].get<float>(), j[1].get<float>(), j[2].get<float>())); // [x,y,z,w]
 			return true;
 		}
 

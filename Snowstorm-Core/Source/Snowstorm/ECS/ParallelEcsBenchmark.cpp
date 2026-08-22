@@ -1,5 +1,7 @@
 #include "ParallelEcsBenchmark.hpp"
 
+#include "Snowstorm/Math/Transform.hpp"
+
 #include "Snowstorm/Components/RotatorComponent.hpp"
 #include "Snowstorm/Components/TransformComponent.hpp"
 #include "Snowstorm/Core/Application.hpp"
@@ -57,7 +59,7 @@ namespace Snowstorm
 				Entity e = world.CreateEntity("Rotator");
 				auto& tr = e.AddComponent<TransformComponent>();
 				tr.Position = {NextFloat(rng, -50.0f, 50.0f), NextFloat(rng, 0.0f, 8.0f), NextFloat(rng, -50.0f, 50.0f)};
-				tr.Rotation = {NextFloat(rng, 0.0f, 6.28f), NextFloat(rng, 0.0f, 6.28f), NextFloat(rng, 0.0f, 6.28f)};
+				tr.Rotation = QuatFromEulerRadians({NextFloat(rng, 0.0f, 6.28f), NextFloat(rng, 0.0f, 6.28f), NextFloat(rng, 0.0f, 6.28f)});
 
 				auto& rot = e.AddComponent<RotatorComponent>();
 				rot.Axis = glm::normalize(glm::vec3(NextFloat(rng, -1.0f, 1.0f), 1.0f, NextFloat(rng, -1.0f, 1.0f)));
@@ -102,7 +104,7 @@ namespace Snowstorm
 			uint64_t rng = 4242u;
 			for (int i = 0; i < count; ++i)
 			{
-				transforms[i].Rotation = {NextFloat(rng, 0.0f, 6.28f), NextFloat(rng, 0.0f, 6.28f), NextFloat(rng, 0.0f, 6.28f)};
+				transforms[i].Rotation = QuatFromEulerRadians({NextFloat(rng, 0.0f, 6.28f), NextFloat(rng, 0.0f, 6.28f), NextFloat(rng, 0.0f, 6.28f)});
 				rotators[i].Axis = glm::normalize(glm::vec3(NextFloat(rng, -1.0f, 1.0f), 1.0f, NextFloat(rng, -1.0f, 1.0f)));
 				rotators[i].SpeedDegPerSec = NextFloat(rng, 15.0f, 90.0f);
 			}

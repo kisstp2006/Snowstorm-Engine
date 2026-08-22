@@ -1,5 +1,7 @@
 #include "SceneBounds.hpp"
 
+#include "Snowstorm/Math/Transform.hpp"
+
 #include "Snowstorm/Assets/AssetManagerSingleton.hpp"
 #include "Snowstorm/Components/CameraComponent.hpp"
 #include "Snowstorm/Components/CameraControllerRuntimeComponent.hpp"
@@ -93,7 +95,7 @@ namespace Snowstorm
 
 			auto& tr = reg.Write<TransformComponent>(e);
 			tr.Position = pose.Position;
-			tr.Rotation = glm::vec3(pose.Pitch, pose.Yaw, 0.0f);
+			tr.Rotation = QuatFromPitchYaw(pose.Pitch, pose.Yaw);
 
 			// Interactive focus only moves the camera; it must NOT reshape the frustum, or focusing a
 			// small object would shrink the far plane and clip the scene when you fly back out. Only the
@@ -109,8 +111,8 @@ namespace Snowstorm
 			if (reg.all_of<CameraControllerRuntimeComponent>(e))
 			{
 				auto& rt = reg.Write<CameraControllerRuntimeComponent>(e);
-				rt.TargetPitch = pose.Pitch;
-				rt.TargetYaw = pose.Yaw;
+				rt.Pitch = rt.TargetPitch = pose.Pitch;
+				rt.Yaw = rt.TargetYaw = pose.Yaw;
 			}
 			break;
 		}

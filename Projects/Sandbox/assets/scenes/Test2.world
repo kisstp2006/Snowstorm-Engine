@@ -17,7 +17,8 @@
           "Rotation": [
             0.0,
             0.0,
-            0.0
+            0.0,
+            1.0
           ],
           "Scale": [
             1.0,
@@ -35,6 +36,6 @@
   ],
   "Scene": {
     "Name": "Untitled",
-    "Version": 1
+    "Version": 2
   }
 }

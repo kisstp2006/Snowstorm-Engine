@@ -3,10 +3,8 @@
 #include "Snowstorm/Components/RotatorComponent.hpp"
 #include "Snowstorm/Components/TransformComponent.hpp"
 
-#define GLM_ENABLE_EXPERIMENTAL
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
-#include <glm/gtx/euler_angles.hpp>
 
 namespace Snowstorm
 {
@@ -26,17 +24,8 @@ namespace Snowstorm
 		const glm::vec3 axis = rot.Axis / glm::sqrt(lenSq);
 		const float deltaAngle = glm::radians(rot.SpeedDegPerSec) * dt;
 
-		// Build the current orientation with the SAME Y->X->Z order TransformComponent uses (Ry * Rx * Rz),
-		// apply the incremental rotation about the (local) axis, then read the Euler angles back in that
-		// order so TransformComponent.Rotation stays canonical and the round-trip introduces no drift.
-		const glm::mat4 currentMat = glm::eulerAngleYXZ(tr.Rotation.y, tr.Rotation.x, tr.Rotation.z);
-		const glm::quat current = glm::quat_cast(currentMat);
-		const glm::quat delta = glm::angleAxis(deltaAngle, axis);
-		const glm::quat next = glm::normalize(current * delta);
-
-		float yaw = 0.0f, pitch = 0.0f, roll = 0.0f;
-		glm::extractEulerAngleYXZ(glm::mat4_cast(next), yaw, pitch, roll);
-
-		tr.Rotation = glm::vec3(pitch, yaw, roll);
+		// Incremental rotation about the LOCAL axis: post-multiply. Normalize to keep the quaternion unit
+		// length over thousands of frames.
+		tr.Rotation = glm::normalize(tr.Rotation * glm::angleAxis(deltaAngle, axis));
 	}
 }
