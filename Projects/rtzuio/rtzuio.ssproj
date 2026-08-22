@@ -1,8 +1,0 @@
-{
-  "Project": {
-    "AssetDirectory": "assets",
-    "AssetRegistryPath": "assets/AssetRegistry.json",
-    "Name": "rtzuio",
-    "StartScene": "assets/scenes/Startup.world"
-  }
-}
