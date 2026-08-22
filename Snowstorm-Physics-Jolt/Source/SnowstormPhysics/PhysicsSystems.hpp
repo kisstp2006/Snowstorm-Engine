@@ -1,20 +1,30 @@
 #pragma once
 
+#include "JoltPhysics/JoltBody.hpp"
+
+#include <Snowstorm/Core/Base.hpp>
 #include <Snowstorm/ECS/System.hpp>
 
-#include <Jolt/Jolt.h>
-
-#include <Jolt/Physics/Collision/Shape/Shape.h>
+#include <glm/gtc/quaternion.hpp>
+#include <glm/vec3.hpp>
 
 namespace Snowstorm
 {
-	class PhysicsWorldSingleton;
-	struct RigidBodyComponent;
+	// Runtime twin of the physics components: the live JoltBody plus the previous fixed-step pose the
+	// write-back interpolates from. Never serialized / copied / shown.
+	struct PhysicsBodyRuntimeComponent
+	{
+		Ref<JoltBody> Body;
+		bool Activated = false; // bodies authored in Edit mode start asleep; woken on the first simulated step
+		glm::vec3 PrevPosition{0.0f};
+		glm::quat PrevRotation{1.0f, 0.0f, 0.0f, 0.0f};
+		bool HasPrev = false;
+	};
 
-	// Resolve phase, AFTER TransformSystem (order +10): authored RigidBody/collider components -> live Jolt
-	// bodies (PhysicsBodyRuntimeComponent). A body is (re)built when the authored hash changes (shape,
-	// settings, world scale); static/kinematic bodies follow an edited transform; bodies whose entity or
-	// component is gone are removed. Runs in Edit mode too so collider debug draw works while authoring.
+	// Resolve phase, AFTER TransformSystem (order +10): authored RigidBody/collider components -> JoltScene
+	// bodies. Rebuilds a body when its authored hash moved, follows an edited transform on static /
+	// kinematic bodies (and on dynamic ones while not simulating, so Play starts from the edit), removes
+	// bodies whose entity or components are gone. Runs in Edit mode too, for debug draw.
 	class PhysicsBodySyncSystem final : public System
 	{
 	public:
@@ -24,16 +34,10 @@ namespace Snowstorm
 		}
 		void Execute(Timestep ts) override;
 		[[nodiscard]] bool RunsInEditMode() const override { return true; }
-
-	private:
-		JPH::RefConst<JPH::Shape> BuildShape(entt::entity body, glm::vec3& outScale, uint64_t& hash) const;
-		void SyncEntity(PhysicsWorldSingleton& physics, entt::entity e, const RigidBodyComponent* rb, bool simulating);
-		void RemoveStale(PhysicsWorldSingleton& physics) const;
 	};
 
-	// FixedUpdate phase: kinematic targets from the (authored) transforms, previous-pose snapshot for
-	// interpolation, then PhysicsSystem::Update on the engine's job pool. Contacts reach ScriptEventQueue
-	// from the listener during the step.
+	// FixedUpdate phase: previous-pose snapshot, kinematic targets, wake-ups, then JoltScene::Simulate on
+	// the engine's job pool (single-threaded Jolt job system without an Application).
 	class PhysicsStepSystem final : public System
 	{
 	public:
@@ -48,9 +52,8 @@ namespace Snowstorm
 		uint32_t m_StepsSinceLog = 0;
 	};
 
-	// Resolve phase, BEFORE TransformSystem (order -10): dynamic bodies' poses (interpolated between the
-	// last two fixed steps by the accumulator's alpha when Interpolate is on) -> the entity's LOCAL
-	// TransformComponent through the parent's inverse, marking it changed so culling/TLAS/velocity react.
+	// Resolve phase, BEFORE TransformSystem (order -10): dynamic bodies' poses (interpolated by the
+	// accumulator's alpha when PhysicsSettings::InterpolateBodies) -> the entity's LOCAL transform.
 	class PhysicsWriteBackSystem final : public System
 	{
 	public:
@@ -62,8 +65,7 @@ namespace Snowstorm
 		[[nodiscard]] bool RunsInEditMode() const override { return false; }
 	};
 
-	// PreRender phase: when physics.debug_draw is on, pushes every body's shape wireframe into the World's
-	// DebugDrawSingleton (the editor viewport draws it); clears the list otherwise.
+	// PreRender phase: physics.debug_draw -> every body's wireframe into DebugDrawSingleton.
 	class PhysicsDebugDrawSystem final : public System
 	{
 	public:

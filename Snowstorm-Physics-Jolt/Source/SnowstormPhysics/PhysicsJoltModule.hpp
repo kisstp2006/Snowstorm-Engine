@@ -4,9 +4,9 @@
 
 namespace Snowstorm
 {
-	// The physics module (ezEngine JoltPlugin shape): Jolt global init + the JoltJobSystem service at
-	// startup, one PhysicsWorldSingleton per World, and the body-sync / step / write-back / debug-draw
-	// systems in their phases. Depends on "Core" (job system, script events, transform hierarchy).
+	// The physics module (ezEngine JoltPlugin / Hazel's JoltPhysics backend): Jolt global init + the
+	// JoltJobSystem service at startup, one JoltScene per World, and the body-sync / step / write-back /
+	// debug-draw systems in their phases. Depends on "Core" (components, layers, job system, scripting).
 	class PhysicsJoltModule final : public IModule
 	{
 	public:

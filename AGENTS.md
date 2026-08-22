@@ -151,23 +151,28 @@ see, so treat it as part of the feature, not an afterthought.
   AssetSync) is driven by a `SystemManager` accumulator at `sim.fixed_hz` (max 4 steps/frame; the
   phase's systems see the fixed dt; `FixedAlpha()` for interpolation) — `ScriptFixedSystem` calls
   `OnFixedUpdate`, the physics step goes there too. Example: `Snowstorm-Editor/.../Examples/Scripts/OrbitScript`.
-- **Physics (Jolt, `Snowstorm-Physics-Jolt/`):** the first real module — ezEngine JoltPlugin / Godot 4
-  Jolt shape. Authored components `RigidBodyComponent` + `Box/Sphere/Capsule/MeshColliderComponent`
-  (several on one entity and on child entities fold into ONE `StaticCompoundShape`; a collider with no
-  RigidBody above is its own static body); runtime twin `PhysicsBodyRuntimeComponent{BodyID, Shape,
-  AuthoredHash}` rebuilt when the authored hash (settings, colliders, world scale) moves.
-  `PhysicsWorldSingleton` = one `JPH::PhysicsSystem` per World (layers: bit 8 moving/static for the
-  broad phase, low 5 bits = a 32×32 collision matrix row, `SetLayersCollide`), contact listener →
-  `ScriptEventQueue`. Systems: `PhysicsWriteBackSystem` (Resolve, order −10, BEFORE TransformSystem:
-  simulated world pose → local transform, interpolated by `FixedAlpha` when `Interpolate`),
-  `PhysicsBodySyncSystem` (Resolve, +10, runs in Edit mode too so colliders exist for debug draw),
-  `PhysicsStepSystem` (FixedUpdate, after `ScriptFixedSystem`; `JoltJobSystem` runs Jolt's jobs on the
-  engine's one `JobSystem` pool, single-threaded fallback without an Application),
-  `PhysicsDebugDrawSystem` (PreRender, `physics.debug_draw` → `DebugDrawSingleton` lines the editor
-  viewport overlays). `physics.log_stats` logs bodies/active/contacts per 60 steps — the headless
-  diagnostic. Jolt's `JPH_*` config comes from the vcpkg port's exported `Jolt::Jolt` target (ABI must
-  match: never define them by hand). Deliberately deferred: character controller, constraints,
-  raycast script API, a cooked `.ssphys` shape cache, collision-matrix persistence in the project file.
+- **Physics (Jolt, Hazel-CE shape):** the engine-side half lives in Core — `Physics/` (`PhysicsTypes`
+  `EBodyType/EForceMode/EActorAxis/ECollisionDetectionType/ECollisionComplexity/ContactType`,
+  `ColliderMaterial`, `PhysicsSettings` + `PhysicsSystem::GetSettings()`, `PhysicsLayerManager`
+  (named layers + collision matrix, layer 0 "Default"), `SceneQueries` (`RayCastInfo`/`SceneQueryHit`))
+  and `Components/PhysicsComponents.hpp` (`RigidBodyComponent{BodyType, LayerID, Mass, LinearDrag,
+  AngularDrag, DisableGravity, IsTrigger, CollisionDetection, Initial*Velocity, Max*Velocity,
+  LockedAxes}`, `CompoundColliderComponent`, `Box/Sphere/CapsuleColliderComponent{…, Material}`,
+  `MeshColliderComponent{ColliderAsset, SubmeshIndex, Material, CollisionComplexity}`), so scenes
+  serialize without the backend. The backend is `Snowstorm-Physics-Jolt/` (IModule "PhysicsJolt"),
+  **native Jolt, no abstraction layer**: `JoltPhysics/JoltScene` (the World's physics singleton: the
+  `JPH::PhysicsSystem`, bodies by entity UUID, contact events → `ScriptEventQueue`, `CastRay`,
+  `Teleport`, `DrawDebug`), `JoltBody` (one body, Hazel-named API: forces, velocities, mass/drag,
+  sleep, kinematic move), `JoltShapes` (component colliders — the entity's and its RigidBody-less
+  children's — → one `StaticCompoundShape`, world scale baked; mesh colliders cooked from the
+  MeshLibrary cook cache), `JoltMaterial` (per-shape friction/restitution + combine functions),
+  `JoltLayerInterface` (object layer = LayerID + moving bit), `JoltContactListener`, `JoltUtils`
+  (the only glm↔Jolt glue), `JoltJobSystem` (Jolt jobs on the engine's `JobSystem`). ECS glue in
+  `PhysicsSystems`: write-back (Resolve −10, interpolated by `FixedAlpha` when
+  `PhysicsSettings::InterpolateBodies`), body sync (Resolve +10, Edit mode too), step (FixedUpdate),
+  debug draw (PreRender → `DebugDrawSingleton`). `physics.debug_draw` / `physics.log_stats`.
+  Deferred: `CharacterController`, constraints, `MeshColliderCache` (cooked shape blobs), shape
+  casts/overlaps, layer persistence in the project file.
 - **Rendering:** backend-agnostic interfaces in `Render/` (`RendererAPI`, `Renderer`, `Pipeline`,
   `Shader`, `Buffer`, `Texture`, `Material`, `RenderGraph`, ...). The concrete implementation lives
   in `Platform/Vulkan/` (volk + Vulkan Memory Allocator + spirv-reflect; shaders compiled to SPIR-V

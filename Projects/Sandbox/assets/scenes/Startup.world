@@ -372,7 +372,7 @@
           "Mask": 3
         },
         "Snowstorm::BoxColliderComponent": {
-          "HalfExtents": [
+          "HalfSize": [
             1.0,
             1.0,
             1.0
@@ -381,19 +381,35 @@
             0,
             0,
             0
-          ]
+          ],
+          "Material": {
+            "Friction": 0.6,
+            "Restitution": 0.0
+          }
         },
         "Snowstorm::RigidBodyComponent": {
-          "Motion": "Static",
+          "BodyType": "Static",
+          "LayerID": 0,
+          "EnableDynamicTypeChange": false,
           "Mass": 1.0,
-          "Friction": 0.6,
-          "Restitution": 0.0,
-          "LinearDamping": 0.05,
-          "AngularDamping": 0.05,
-          "GravityFactor": 1.0,
+          "LinearDrag": 0.05,
+          "AngularDrag": 0.05,
+          "DisableGravity": false,
           "IsTrigger": false,
-          "CollisionLayer": 0,
-          "Interpolate": true
+          "CollisionDetection": "Discrete",
+          "InitialLinearVelocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "InitialAngularVelocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "MaxLinearVelocity": 500.0,
+          "MaxAngularVelocity": 50.0,
+          "LockedAxes": 0
         }
       }
     },
@@ -429,7 +445,7 @@
           "Mask": 3
         },
         "Snowstorm::BoxColliderComponent": {
-          "HalfExtents": [
+          "HalfSize": [
             1.0,
             1.0,
             1.0
@@ -438,19 +454,35 @@
             0,
             0,
             0
-          ]
+          ],
+          "Material": {
+            "Friction": 0.5,
+            "Restitution": 0.1
+          }
         },
         "Snowstorm::RigidBodyComponent": {
-          "Motion": "Dynamic",
+          "BodyType": "Dynamic",
+          "LayerID": 0,
+          "EnableDynamicTypeChange": false,
           "Mass": 1.0,
-          "Friction": 0.5,
-          "Restitution": 0.1,
-          "LinearDamping": 0.05,
-          "AngularDamping": 0.05,
-          "GravityFactor": 1.0,
+          "LinearDrag": 0.05,
+          "AngularDrag": 0.05,
+          "DisableGravity": false,
           "IsTrigger": false,
-          "CollisionLayer": 0,
-          "Interpolate": true
+          "CollisionDetection": "Discrete",
+          "InitialLinearVelocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "InitialAngularVelocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "MaxLinearVelocity": 500.0,
+          "MaxAngularVelocity": 50.0,
+          "LockedAxes": 0
         }
       }
     },
@@ -486,7 +518,7 @@
           "Mask": 3
         },
         "Snowstorm::BoxColliderComponent": {
-          "HalfExtents": [
+          "HalfSize": [
             1.0,
             1.0,
             1.0
@@ -495,19 +527,35 @@
             0,
             0,
             0
-          ]
+          ],
+          "Material": {
+            "Friction": 0.5,
+            "Restitution": 0.1
+          }
         },
         "Snowstorm::RigidBodyComponent": {
-          "Motion": "Dynamic",
+          "BodyType": "Dynamic",
+          "LayerID": 0,
+          "EnableDynamicTypeChange": false,
           "Mass": 1.0,
-          "Friction": 0.5,
-          "Restitution": 0.1,
-          "LinearDamping": 0.05,
-          "AngularDamping": 0.05,
-          "GravityFactor": 1.0,
+          "LinearDrag": 0.05,
+          "AngularDrag": 0.05,
+          "DisableGravity": false,
           "IsTrigger": false,
-          "CollisionLayer": 0,
-          "Interpolate": true
+          "CollisionDetection": "Discrete",
+          "InitialLinearVelocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "InitialAngularVelocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "MaxLinearVelocity": 500.0,
+          "MaxAngularVelocity": 50.0,
+          "LockedAxes": 0
         }
       }
     },
@@ -543,7 +591,7 @@
           "Mask": 3
         },
         "Snowstorm::BoxColliderComponent": {
-          "HalfExtents": [
+          "HalfSize": [
             1.0,
             1.0,
             1.0
@@ -552,19 +600,35 @@
             0,
             0,
             0
-          ]
+          ],
+          "Material": {
+            "Friction": 0.5,
+            "Restitution": 0.1
+          }
         },
         "Snowstorm::RigidBodyComponent": {
-          "Motion": "Dynamic",
+          "BodyType": "Dynamic",
+          "LayerID": 0,
+          "EnableDynamicTypeChange": false,
           "Mass": 1.0,
-          "Friction": 0.5,
-          "Restitution": 0.1,
-          "LinearDamping": 0.05,
-          "AngularDamping": 0.05,
-          "GravityFactor": 1.0,
+          "LinearDrag": 0.05,
+          "AngularDrag": 0.05,
+          "DisableGravity": false,
           "IsTrigger": false,
-          "CollisionLayer": 0,
-          "Interpolate": true
+          "CollisionDetection": "Discrete",
+          "InitialLinearVelocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "InitialAngularVelocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "MaxLinearVelocity": 500.0,
+          "MaxAngularVelocity": 50.0,
+          "LockedAxes": 0
         }
       }
     }

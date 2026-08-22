@@ -1,8 +1,8 @@
 #include "PhysicsJoltModule.hpp"
 
-#include "JoltJobSystem.hpp"
+#include "JoltPhysics/JoltJobSystem.hpp"
+#include "JoltPhysics/JoltScene.hpp"
 #include "PhysicsSystems.hpp"
-#include "PhysicsWorldSingleton.hpp"
 
 #include <Snowstorm/Core/JobSystem.hpp>
 #include <Snowstorm/Core/Log.hpp>
@@ -73,7 +73,7 @@ namespace Snowstorm
 
 	void PhysicsJoltModule::RegisterWorld(World& world)
 	{
-		world.GetSingletonManager().RegisterSingleton<PhysicsWorldSingleton>(&world);
+		world.GetSingletonManager().RegisterSingleton<JoltScene>(&world);
 
 		auto& sm = world.GetSystemManager();
 		// Resolve: write-back BEFORE TransformSystem (order -10) so the simulated pose propagates to

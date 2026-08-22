@@ -11,11 +11,11 @@
 #include "Snowstorm/World/SimulationStateSingleton.hpp"
 #include "Snowstorm/World/World.hpp"
 
-#include "SnowstormPhysics/Components/PhysicsBodyRuntimeComponent.hpp"
-#include "SnowstormPhysics/Components/PhysicsComponents.hpp"
+#include "Snowstorm/Components/PhysicsComponents.hpp"
+#include "Snowstorm/Physics/PhysicsLayer.hpp"
+#include "SnowstormPhysics/JoltPhysics/JoltScene.hpp"
 #include "SnowstormPhysics/PhysicsJoltModule.hpp"
 #include "SnowstormPhysics/PhysicsSystems.hpp"
-#include "SnowstormPhysics/PhysicsWorldSingleton.hpp"
 
 using namespace Snowstorm;
 
@@ -31,23 +31,24 @@ namespace
 			PhysicsJoltModule::EnsureJoltInitialized();
 			CVars::EcsParallel.Set(false);
 			W.GetSingletonManager().RegisterSingleton<ScriptEventQueue>();
-			W.GetSingletonManager().RegisterSingleton<PhysicsWorldSingleton>(&W);
+			PhysicsLayerManager::ClearLayers();
+			W.GetSingletonManager().RegisterSingleton<JoltScene>(&W);
 			auto& sm = W.GetSystemManager();
 			sm.RegisterSystemOrdered<PhysicsWriteBackSystem>(SystemPhase::Resolve, -10);
 			sm.RegisterSystem<TransformSystem>(SystemPhase::Resolve);
 			sm.RegisterSystemOrdered<PhysicsBodySyncSystem>(SystemPhase::Resolve, 10);
 			sm.RegisterSystem<PhysicsStepSystem>(SystemPhase::FixedUpdate);
 		}
-		Entity Box(const char* name, const glm::vec3 pos, const glm::vec3 scale, const MotionType motion, const uint32_t layer = 0)
+		Entity Box(const char* name, const glm::vec3 pos, const glm::vec3 scale, const EBodyType bodyType, const uint32_t layer = 0)
 		{
 			Entity e = W.CreateEntity(name);
 			auto& tr = e.AddComponent<TransformComponent>();
 			tr.Position = pos;
 			tr.Scale = scale;
-			e.AddComponent<BoxColliderComponent>().HalfExtents = glm::vec3(0.5f); // explicit: the numbers below assume a unit box
+			e.AddComponent<BoxColliderComponent>().HalfSize = glm::vec3(0.5f); // explicit: the numbers below assume a unit box
 			auto& rb = e.AddComponent<RigidBodyComponent>();
-			rb.Motion = motion;
-			rb.CollisionLayer = layer;
+			rb.BodyType = bodyType;
+			rb.LayerID = layer;
 			return e;
 		}
 		void Step(const int frames)
@@ -68,11 +69,11 @@ TEST_CASE("A dynamic box falls onto a static floor and comes to rest, determinis
 	auto run = []
 	{
 		PhysicsWorld pw;
-		pw.Box("Floor", {0, -2, 0}, {10, 0.25f, 10}, MotionType::Static);
-		Entity cube = pw.Box("Cube", {0, 4, 0}, {1, 1, 1}, MotionType::Dynamic);
+		pw.Box("Floor", {0, -2, 0}, {10, 0.25f, 10}, EBodyType::Static);
+		Entity cube = pw.Box("Cube", {0, 4, 0}, {1, 1, 1}, EBodyType::Dynamic);
 		pw.Step(1); // bodies get created at the end of the first frame (Resolve)
 		REQUIRE(cube.HasComponent<PhysicsBodyRuntimeComponent>());
-		REQUIRE(pw.W.GetSingleton<PhysicsWorldSingleton>().BodyCount() == 2);
+		REQUIRE(pw.W.GetSingleton<JoltScene>().GetBodyCount() == 2);
 		pw.Step(240); // 4 s
 		return cube.GetComponent<TransformComponent>().Position;
 	};
@@ -93,17 +94,17 @@ TEST_CASE("A dynamic box falls onto a static floor and comes to rest, determinis
 TEST_CASE("A child collider folds into the parent body's compound shape and follows it", "[physics][hierarchy]")
 {
 	PhysicsWorld pw;
-	pw.Box("Floor", {0, -2, 0}, {10, 0.25f, 10}, MotionType::Static);
-	Entity body = pw.Box("Body", {0, 4, 0}, {1, 1, 1}, MotionType::Dynamic);
+	pw.Box("Floor", {0, -2, 0}, {10, 0.25f, 10}, EBodyType::Static);
+	Entity body = pw.Box("Body", {0, 4, 0}, {1, 1, 1}, EBodyType::Dynamic);
 	Entity child = pw.W.CreateEntity("Child");
 	child.AddComponent<TransformComponent>().Position = {2, 0, 0};
-	child.AddComponent<BoxColliderComponent>().HalfExtents = glm::vec3(0.5f);
+	child.AddComponent<BoxColliderComponent>().HalfSize = glm::vec3(0.5f);
 	pw.W.SetParent(child, body, false);
 
 	pw.Step(1);
 	REQUIRE(body.HasComponent<PhysicsBodyRuntimeComponent>());
 	REQUIRE_FALSE(child.HasComponent<PhysicsBodyRuntimeComponent>()); // not a body of its own
-	REQUIRE(pw.W.GetSingleton<PhysicsWorldSingleton>().BodyCount() == 2);
+	REQUIRE(pw.W.GetSingleton<JoltScene>().GetBodyCount() == 2);
 
 	pw.Step(240);
 	// The child rides along: it stays 2 units from the body (the hierarchy propagates the simulated pose).
@@ -116,16 +117,16 @@ TEST_CASE("A child collider folds into the parent body's compound shape and foll
 TEST_CASE("The collision matrix gates contacts and the script event queue receives CollisionEnter", "[physics]")
 {
 	PhysicsWorld pw;
-	auto& physics = pw.W.GetSingleton<PhysicsWorldSingleton>();
-	pw.Box("Floor", {0, -2, 0}, {10, 0.25f, 10}, MotionType::Static, 0);
-	Entity ghost = pw.Box("Ghost", {0, 2, 0}, {1, 1, 1}, MotionType::Dynamic, 1);
-	physics.SetLayersCollide(0, 1, false); // layer 1 passes through layer 0
+	pw.Box("Floor", {0, -2, 0}, {10, 0.25f, 10}, EBodyType::Static, 0);
+	Entity ghost = pw.Box("Ghost", {0, 2, 0}, {1, 1, 1}, EBodyType::Dynamic, 1);
+	PhysicsLayerManager::AddLayer("Ghosts");
+	PhysicsLayerManager::SetLayerCollision(0, 1, false); // layer 1 passes through layer 0
 
 	pw.Step(240);
 	REQUIRE(ghost.GetComponent<TransformComponent>().Position.y < -3.0f); // fell through the floor
 
-	physics.SetLayersCollide(0, 1, true);
-	Entity solid = pw.Box("Solid", {3, 2, 0}, {1, 1, 1}, MotionType::Dynamic, 1);
+	PhysicsLayerManager::SetLayerCollision(0, 1, true);
+	Entity solid = pw.Box("Solid", {3, 2, 0}, {1, 1, 1}, EBodyType::Dynamic, 1);
 	pw.Step(240);
 	std::vector<ScriptEvent> events;
 	pw.W.GetSingleton<ScriptEventQueue>().Drain(events);
@@ -145,9 +146,9 @@ TEST_CASE("Bodies authored in Edit mode all wake up when Play starts", "[physics
 {
 	PhysicsWorld pw;
 	pw.W.GetSingletonManager().RegisterSingleton<SimulationStateSingleton>(); // Edit mode
-	pw.Box("Floor", {0, -2, 0}, {10, 0.25f, 10}, MotionType::Static);
-	Entity a = pw.Box("A", {0, 4, 0}, {1, 1, 1}, MotionType::Dynamic);
-	Entity b = pw.Box("B", {3, 4, 0}, {1, 1, 1}, MotionType::Dynamic);
+	pw.Box("Floor", {0, -2, 0}, {10, 0.25f, 10}, EBodyType::Static);
+	Entity a = pw.Box("A", {0, 4, 0}, {1, 1, 1}, EBodyType::Dynamic);
+	Entity b = pw.Box("B", {3, 4, 0}, {1, 1, 1}, EBodyType::Dynamic);
 	pw.Step(30); // Edit mode: bodies exist (debug draw) but nothing moves
 	REQUIRE(a.HasComponent<PhysicsBodyRuntimeComponent>());
 	REQUIRE(a.GetComponent<TransformComponent>().Position.y == Catch::Approx(4.0f));
