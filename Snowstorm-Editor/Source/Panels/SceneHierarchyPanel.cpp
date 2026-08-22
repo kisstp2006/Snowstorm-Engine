@@ -31,6 +31,7 @@
 #include "Singletons/EditorHistorySingleton.hpp"
 #include "Singletons/EditorSelectionSingleton.hpp"
 #include "Snowstorm/Assets/AssetManagerSingleton.hpp"
+#include "AssetImportPanel.hpp"
 #include "MaterialInspectorPanel.hpp"
 #include "Snowstorm/World/SceneSerializer.hpp"
 
@@ -490,6 +491,11 @@ namespace Snowstorm
 			// A material asset is selected in the Content Browser — show the material inspector instead of
 			// the entity component inspector (the two are mutually exclusive; see EditorSelectionSingleton).
 			DrawMaterialInspector(*m_World, m_World->GetSingleton<AssetManagerSingleton>(), sel.SelectedAsset);
+		}
+		else if (sel.SelectedAsset != 0 && (sel.SelectedAssetType == AssetType::Texture || sel.SelectedAssetType == AssetType::Mesh))
+		{
+			// A texture/mesh asset is selected: its import settings (.meta) + Reimport.
+			DrawAssetImportInspector(m_World->GetSingleton<AssetManagerSingleton>(), sel.SelectedAsset, sel.SelectedAssetType);
 		}
 		else
 		{

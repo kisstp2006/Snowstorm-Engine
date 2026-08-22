@@ -860,41 +860,70 @@ namespace Snowstorm
 
 		for (const AssetHandle handle : before)
 		{
-			switch (type)
-			{
-			case AssetType::Texture:
-			{
-				// In-place: re-decode on a worker and rewrite the SAME bindless slot the live views hold, so
-				// every material that baked the slot index sees the new pixels with no re-resolve at all.
-				const AssetMetadata* meta = m_Registry.GetMetadata(handle);
-				if (!meta)
-				{
-					break;
-				}
-				for (const bool srgb : {true, false})
-				{
-					auto& cache = srgb ? m_TextureViewCache : m_TextureViewCacheLinear;
-					if (const auto it = cache.find(handle.Value()); it != cache.end() && it->second)
-					{
-						KickTextureDecode(*meta, srgb, it->second->GetGlobalBindlessIndex());
-					}
-				}
-				break;
-			}
-			case AssetType::Mesh:
-				// Evict the GPU mesh; MeshResolveSystem re-resolves every entity whose runtime component
-				// points at it (async cook, so the old mesh keeps drawing until the new one is resident).
-				m_MeshCache.erase(handle.Value());
-				InvalidateMeshUsers(handle);
-				break;
-			case AssetType::Material:
-				ReloadMaterial(handle);
-				InvalidateMaterialUsers(handle);
-				break;
-			default:
-				break;
-			}
+			ReloadLive(handle, type);
 		}
+	}
+
+	void AssetManagerSingleton::ReloadLive(const AssetHandle handle, const AssetType type)
+	{
+		switch (type)
+		{
+		case AssetType::Texture:
+		{
+			// In-place: re-decode on a worker and rewrite the SAME bindless slot the live views hold, so
+			// every material that baked the slot index sees the new pixels with no re-resolve at all.
+			const AssetMetadata* meta = m_Registry.GetMetadata(handle);
+			if (!meta)
+			{
+				break;
+			}
+			for (const bool srgb : {true, false})
+			{
+				auto& cache = srgb ? m_TextureViewCache : m_TextureViewCacheLinear;
+				if (const auto it = cache.find(handle.Value()); it != cache.end() && it->second)
+				{
+					KickTextureDecode(*meta, srgb, it->second->GetGlobalBindlessIndex());
+				}
+			}
+			break;
+		}
+		case AssetType::Mesh:
+			// Evict the GPU mesh; MeshResolveSystem re-resolves every entity whose runtime component
+			// points at it (async cook, so the old mesh keeps drawing until the new one is resident).
+			m_MeshCache.erase(handle.Value());
+			InvalidateMeshUsers(handle);
+			break;
+		case AssetType::Material:
+			ReloadMaterial(handle);
+			InvalidateMaterialUsers(handle);
+			break;
+		default:
+			break;
+		}
+	}
+
+	bool AssetManagerSingleton::ReimportAsset(const AssetHandle handle, const ImportSettings& settings)
+	{
+		const AssetMetadata* meta = m_Registry.GetMetadata(handle);
+		if (!meta)
+		{
+			return false;
+		}
+		const AssetType type = meta->Type;
+		if (!m_Registry.SetImportSettings(handle, settings))
+		{
+			return false;
+		}
+		// The settings hash is part of the cook key, so every part of this source re-cooks on reload.
+		for (const AssetHandle h : m_Registry.HandlesForSource(meta->Path))
+		{
+			ReloadLive(h, type);
+		}
+		if (const Ref<Project> project = Project::GetActive())
+		{
+			m_Registry.SaveToFile(project->GetAssetRegistryPath());
+		}
+		return true;
 	}
 
 	void AssetManagerSingleton::InvalidateMeshUsers(const AssetHandle handle)

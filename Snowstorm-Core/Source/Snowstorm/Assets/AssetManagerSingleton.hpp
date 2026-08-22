@@ -60,6 +60,10 @@ namespace Snowstorm
 		// by invalidating their runtime components so the resolve systems re-pull.
 		void OnSourceChanged(const std::filesystem::path& relPath, AssetType type, bool removed);
 
+		// Editor "Reimport": persist new import settings to the .meta and re-cook/swap the live objects of
+		// every part of that source (the settings hash is part of the cook key).
+		bool ReimportAsset(AssetHandle handle, const ImportSettings& settings);
+
 		// Import a model file (any Assimp format) as a set of renderable entities — one per submesh,
 		// each with Transform + Mesh + Material + Visibility. A per-submesh ".ssmat" is generated next
 		// to the model (DefaultLit; diffuse color + diffuse texture from the aiMaterial when present).
@@ -210,6 +214,8 @@ namespace Snowstorm
 		// Async decode of `meta`'s source into bindless `slot` (placeholder or a live view's). False if a
 		// decode for that (handle, srgb) is already in flight.
 		bool KickTextureDecode(const AssetMetadata& meta, bool srgb, uint32_t slot);
+		// Swap the live GPU object(s) of one handle after its source or settings changed (see OnSourceChanged).
+		void ReloadLive(AssetHandle handle, AssetType type);
 		void InvalidateMeshUsers(AssetHandle handle);
 		void InvalidateMaterialUsers(AssetHandle handle);
 		uint64_t m_RegistryGeneration = 1;
