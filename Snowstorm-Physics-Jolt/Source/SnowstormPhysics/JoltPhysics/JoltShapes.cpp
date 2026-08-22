@@ -1,6 +1,7 @@
 #include "JoltShapes.hpp"
 
 #include "JoltMaterial.hpp"
+#include "JoltShapeCache.hpp"
 #include "JoltUtils.hpp"
 
 #include <Snowstorm/Assets/AssetManagerSingleton.hpp>
@@ -79,8 +80,18 @@ namespace Snowstorm
 			{
 				submesh = static_cast<int>(submeshIndex);
 			}
+			// Cooked-shape cache: building a MeshShape's BVH (or running the convex-hull solver) is the
+			// expensive half of this function, and neither depends on anything but the source geometry --
+			// so it is done once per (mesh, submesh, convexity) and read back afterwards.
+			const uint64_t sourceKey = assets.Registry().SourceKey(handle);
+			if (JPH::RefConst<JPH::Shape> cachedShape =
+			        JoltShapeCache::Load(handle, static_cast<uint32_t>(submesh), convex, sourceKey, material))
+			{
+				return cachedShape;
+			}
+
 			auto& meshLib = Application::Get().GetServiceManager().GetService<MeshLibrary>();
-			const auto cooked = meshLib.LoadCookedCPU(assets.Registry().Resolve(file).string(), submesh, handle, assets.Registry().SourceKey(handle));
+			const auto cooked = meshLib.LoadCookedCPU(assets.Registry().Resolve(file).string(), submesh, handle, sourceKey);
 			if (!cooked || cooked->Vertices.empty())
 			{
 				SS_CORE_WARN("MeshCollider: no geometry for '{}'.", meta->Path.string());
@@ -121,6 +132,8 @@ namespace Snowstorm
 				SS_CORE_WARN("MeshCollider: shape build failed for '{}': {}", meta->Path.string(), result.GetError().c_str());
 				return nullptr;
 			}
+
+			JoltShapeCache::Save(handle, static_cast<uint32_t>(submesh), convex, sourceKey, *result.Get());
 			return result.Get();
 		}
 
@@ -217,6 +230,15 @@ namespace Snowstorm
 					convex = false;
 				else if (mesh->CollisionComplexity == ECollisionComplexity::UseSimpleAsComplex)
 					convex = true;
+				// A triangle mesh has no inside, so Jolt only accepts it on a static/kinematic body -- asking
+				// for one on a moving body would fail at body creation with a message about the shape, far from
+				// the setting that caused it. Fall back to the convex hull and say so instead.
+				if (!convex && !bodyIsStatic)
+				{
+					SS_CORE_WARN("MeshCollider on a non-static body cannot use exact triangles; using a convex "
+					             "hull instead (set Collision Complexity to 'UseSimpleAsComplex' to silence this).");
+					convex = true;
+				}
 				if (JPH::RefConst<JPH::Shape> shape = CookMeshShape(world, handle, mesh->SubmeshIndex, convex, new JoltMaterial(mesh->Material)))
 				{
 					parts.push_back({shape, pos, rot});
