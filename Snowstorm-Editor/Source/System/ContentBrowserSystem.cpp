@@ -20,30 +20,6 @@ namespace Snowstorm
 	namespace
 	{
 		// Map a file extension (lowercase, with dot) to an asset type. None means "not importable".
-		AssetType TypeFromExtension(const std::string& ext)
-		{
-			if (ext == ".obj" || ext == ".fbx" || ext == ".gltf" || ext == ".glb")
-			{
-				return AssetType::Mesh;
-			}
-			if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".tga" || ext == ".dds" || ext == ".bmp")
-			{
-				return AssetType::Texture;
-			}
-			if (ext == ".ssmat")
-			{
-				return AssetType::Material;
-			}
-			if (ext == ".hlsl")
-			{
-				return AssetType::Shader;
-			}
-			if (ext == ".world")
-			{
-				return AssetType::Scene;
-			}
-			return AssetType::None;
-		}
 
 		ImVec4 TypeColor(const AssetType t)
 		{
@@ -69,57 +45,17 @@ namespace Snowstorm
 	{
 		m_Entries.clear();
 
-		// Scan the ACTIVE project's asset directory, not a CWD-relative literal — after a project
-		// switch the fresh World's ContentBrowserSystem rescans automatically (m_Scanned starts
+		// The scan (import step) lives in Core: AssetRegistry::Scan walks the ACTIVE project's asset
+		// directory, gives every source a .meta + registry handle, and hands back the file list. After a
+		// project switch the fresh World's ContentBrowserSystem rescans automatically (m_Scanned starts
 		// false), and it must list the new project's content.
-		const std::filesystem::path projectDir = Project::GetActive()->GetProjectDirectory();
-		const std::filesystem::path root = Project::GetActive()->GetAssetDirectory();
-		std::error_code ec;
-		if (!std::filesystem::exists(root, ec))
+		auto& assets = m_World->GetSingleton<AssetManagerSingleton>();
+		for (const auto& file : assets.ScanAssets())
 		{
-			m_Scanned = true;
-			return;
-		}
-
-		for (auto it = std::filesystem::recursive_directory_iterator(root, ec);
-		     it != std::filesystem::recursive_directory_iterator(); it.increment(ec))
-		{
-			if (ec)
-			{
-				continue;
-			}
-
-			// Skip Engine/cache/: those are generated cooked artifacts (gitignored), not source
-			// assets — don't list or import them.
-			if (it->is_directory(ec) && it->path().filename() == "cache")
-			{
-				it.disable_recursion_pending();
-				continue;
-			}
-
-			if (!it->is_regular_file(ec))
-			{
-				continue;
-			}
-
-			std::string ext = it->path().extension().string();
-			std::ranges::transform(ext, ext.begin(), [](const unsigned char c)
-			                       { return static_cast<char>(std::tolower(c)); });
-
-			const AssetType type = TypeFromExtension(ext);
-			if (type == AssetType::None)
-			{
-				continue; // skip scenes, json, meta caches, etc.
-			}
-
 			Entry entry;
-			// Project-relative, matching the relative paths stored in AssetRegistry.json — an absolute
-			// path here would be imported verbatim into the registry (non-portable, and a duplicate of
-			// any existing relative entry for the same file). Identical to the old CWD-relative value
-			// while the project root == the working directory (today's bootstrap project).
-			entry.Path = it->path().lexically_relative(projectDir).generic_string();
-			entry.DisplayName = it->path().filename().string();
-			entry.Type = type;
+			entry.Path = file.Path.generic_string();
+			entry.DisplayName = file.Path.filename().string();
+			entry.Type = file.Type;
 			m_Entries.push_back(std::move(entry));
 		}
 
@@ -127,32 +63,6 @@ namespace Snowstorm
 		                  {
 			if (a.Type != b.Type) return a.Type < b.Type;
 			return a.DisplayName < b.DisplayName; });
-
-		// Auto-import: every discovered source file gets a registry handle so it is immediately
-		// usable in the inspector picker. Import is idempotent (case-insensitive dedup), so this is
-		// safe to run on every scan and never creates duplicates. This is the trivial current form of
-		// a real engine's import step (see CLAUDE.md "Think like a real engine"); the deliberate next
-		// step up is a file watcher so this happens without an explicit scan.
-		auto& assets = m_World->GetSingleton<AssetManagerSingleton>();
-		bool importedAny = false;
-		for (const Entry& entry : m_Entries)
-		{
-			// Scenes are opened by path (double-click), not referenced by handle, so they are not
-			// registry assets — don't auto-import them.
-			if (entry.Type == AssetType::Scene)
-			{
-				continue;
-			}
-			if (assets.FindHandle(entry.Path, entry.Type) == 0)
-			{
-				assets.Import(entry.Path, entry.Type);
-				importedAny = true;
-			}
-		}
-		if (importedAny)
-		{
-			assets.SaveRegistry(Project::GetActive()->GetAssetRegistryPath());
-		}
 
 		m_Scanned = true;
 	}

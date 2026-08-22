@@ -57,6 +57,9 @@ namespace Snowstorm
 	{
 		AssetHandle Handle{};
 		AssetType Type = AssetType::None;
-		std::filesystem::path Path;
+		std::filesystem::path Path; // project-relative; "file?submesh=N" for a sub-asset of a model
+		// Cook-cache freshness key for this asset's source: content hash ^ import-settings hash (see
+		// AssetRegistry::SourceKey). 0 = not yet scanned.
+		uint64_t SourceKey = 0;
 	};
 }

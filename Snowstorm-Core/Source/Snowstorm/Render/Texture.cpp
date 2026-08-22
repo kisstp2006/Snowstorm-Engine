@@ -76,7 +76,7 @@ namespace Snowstorm
 		}
 	}
 
-	std::optional<CookedTexture> Texture::DecodeCPU(const std::filesystem::path& filePath, const AssetHandle handle, const uint64_t sourceWriteTime)
+	std::optional<CookedTexture> Texture::DecodeCPU(const std::filesystem::path& filePath, const AssetHandle handle, const uint64_t sourceWriteTime, const bool generateMips)
 	{
 		// CPU-only, worker-safe. Fast path: the cooked .sstex blob (no stb decode + no mip-gen). The decoded
 		// RGBA bytes are color-space-agnostic, so one blob serves both sRGB and linear views (srgb is applied
@@ -108,7 +108,7 @@ namespace Snowstorm
 		// upload is a pure staging->image copy per level (no vkCmdBlitImage) — so the whole upload can run on
 		// a transfer-only queue without touching the graphics queue. (Old path blitted mips on the graphics
 		// queue at upload time, stalling the frame.)
-		const uint32_t mipCount = MipCountFor(cooked.Width, cooked.Height);
+		const uint32_t mipCount = generateMips ? MipCountFor(cooked.Width, cooked.Height) : 1u;
 		cooked.Levels.resize(mipCount);
 		cooked.Levels[0].assign(pixels, pixels + static_cast<size_t>(w) * h * 4);
 		stbi_image_free(pixels);

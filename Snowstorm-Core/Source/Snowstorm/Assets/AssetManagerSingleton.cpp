@@ -81,9 +81,46 @@ namespace Snowstorm
 		}
 	}
 
+	AssetManagerSingleton::~AssetManagerSingleton()
+	{
+		if (m_InFlightMeshes.empty() && m_InFlightTextures.empty())
+		{
+			return;
+		}
+		if (Application::Exists() && Application::Get().GetServiceManager().ServiceRegistered<JobSystem>())
+		{
+			Application::Get().GetServiceManager().GetService<JobSystem>().WaitAll();
+		}
+	}
+
 	bool AssetManagerSingleton::LoadRegistry(const std::filesystem::path& filePath)
 	{
-		return m_Registry.LoadFromFile(filePath);
+		if (const Ref<Project> project = Project::GetActive())
+		{
+			m_Registry.SetProjectDirectory(project->GetProjectDirectory());
+		}
+		const bool ok = m_Registry.LoadFromFile(filePath);
+		// The cache is only an accelerator: the .meta sidecars are the truth, so always reconcile with the
+		// asset directory (this also migrates a pre-meta registry by writing sidecars for its rows).
+		ScanAssets();
+		return ok;
+	}
+
+	std::vector<AssetRegistry::ScannedFile> AssetManagerSingleton::ScanAssets()
+	{
+		const Ref<Project> project = Project::GetActive();
+		if (!project)
+		{
+			return {};
+		}
+		m_Registry.SetProjectDirectory(project->GetProjectDirectory());
+		bool changed = false;
+		std::vector<AssetRegistry::ScannedFile> found = m_Registry.Scan(project->GetAssetDirectory(), changed);
+		if (changed)
+		{
+			m_Registry.SaveToFile(project->GetAssetRegistryPath());
+		}
+		return found;
 	}
 
 	bool AssetManagerSingleton::SaveRegistry(const std::filesystem::path& filePath) const
@@ -369,7 +406,7 @@ namespace Snowstorm
 		// operate on the right file and part. A plain mesh has SubmeshIndex == -1 (whole file).
 		const SubmeshRef sub = ParseSubmeshPath(meta->Path.string());
 		const std::filesystem::path filePath = ResolveAssetPath(sub.FilePath);
-		const uint64_t sourceTime = GetFileWriteTimeU64(filePath);
+		const uint64_t sourceTime = m_Registry.SourceKey(handle); // content hash ^ import settings
 
 		MeshBounds bounds{};
 		bool haveBounds = false;
@@ -402,7 +439,7 @@ namespace Snowstorm
 		// source file at most once total, not once per part. Whole-file loads keep the plain path (they
 		// flatten every submesh and aren't the startup hot spot).
 		Ref<Mesh> mesh = (sub.SubmeshIndex >= 0)
-		                     ? meshLib.LoadCached(filePath.string(), sub.SubmeshIndex, handle)
+		                     ? meshLib.LoadCached(filePath.string(), sub.SubmeshIndex, handle, sourceTime)
 		                     : meshLib.Load(filePath.string());
 
 		if (mesh && haveBounds)
@@ -468,7 +505,8 @@ namespace Snowstorm
 		const std::string filePath = ResolveAssetPath(sub.FilePath).string();
 		const int submeshIndex = sub.SubmeshIndex;
 
-		(void)jobs.Submit([this, &meshLib, handle, filePath, submeshIndex]()
+		const uint64_t sourceKey = m_Registry.SourceKey(handle);
+		(void)jobs.Submit([this, &meshLib, handle, filePath, submeshIndex, sourceKey]()
 		                  {
 			CompletedMeshLoad done;
 			done.Handle = handle;
@@ -477,7 +515,7 @@ namespace Snowstorm
 
 			// CPU-only work on the worker: read the cooked blob or parse+cook the source. No GPU, no
 			// m_MeshCache/m_Meshes access (those are main-thread-only).
-			if (auto cooked = meshLib.LoadCookedCPU(filePath, submeshIndex, handle))
+			if (auto cooked = meshLib.LoadCookedCPU(filePath, submeshIndex, handle, sourceKey))
 			{
 				done.Cooked = std::move(*cooked);
 				done.Success = true;
@@ -543,7 +581,7 @@ namespace Snowstorm
 						MeshMetaCache out{};
 						out.Handle = done.Handle;
 						out.SourcePath = done.FilePath;
-						out.SourceWriteTime = GetFileWriteTimeU64(done.FilePath);
+						out.SourceWriteTime = m_Registry.SourceKey(done.Handle);
 						out.Bounds = bounds;
 						(void)MeshMetaCacheIO::Save(out);
 					}
@@ -756,11 +794,12 @@ namespace Snowstorm
 		auto& jobs = Application::Get().GetServiceManager().GetService<JobSystem>();
 		const std::string path = ResolveAssetPath(meta->Path).string();
 		const std::string debugName = meta->Path.filename().string();
-		const uint64_t sourceTime = GetFileWriteTimeU64(path);
+		const uint64_t sourceTime = m_Registry.SourceKey(handle);
+		const bool generateMips = m_Registry.GetImportSettings(handle).Texture.GenerateMips;
 		const uint32_t slot = placeholder->GetGlobalBindlessIndex();
 		m_PlaceholderSlots.insert(slot); // slot now shows the placeholder; cleared when the real image is uploaded
 
-		(void)jobs.Submit([this, key, handle, srgb, slot, path, sourceTime, debugName]()
+		(void)jobs.Submit([this, key, handle, srgb, slot, path, sourceTime, generateMips, debugName]()
 		                  {
 			CompletedTextureLoad done;
 			done.Key = key;
@@ -770,7 +809,7 @@ namespace Snowstorm
 			done.DebugName = debugName;
 
 			// CPU-only on the worker: cooked-blob read or stb decode (+ cache write). No GPU.
-			if (auto cooked = Texture::DecodeCPU(path, handle, sourceTime))
+			if (auto cooked = Texture::DecodeCPU(path, handle, sourceTime, generateMips))
 			{
 				done.Cooked = std::move(*cooked);
 				done.Success = true;

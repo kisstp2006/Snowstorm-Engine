@@ -249,14 +249,17 @@ Worked example — **asset pipeline** (the engine's current biggest simplificati
   watcher** re-cooks only what changed (and its dependents) and hot-reloads it; the runtime
   **streams** cooked assets asynchronously under a memory budget; builds cook only the transitive
   closure of what scenes actually reference (no dead content shipped).
-- **Where Snowstorm is today (deliberately):** `Import` just adds a `handle → path` row to a JSON
-  registry; there is no cook step (Assimp/dxc/stb run every startup), no `.meta`, no hot-reload, no
-  async, no GUID-vs-path indirection (handles are stable but the registry stores raw paths). This is
-  acceptable for the thesis. The editor's manual "Import" button mirrors the fact that, in a real
-  engine, import is a *deliberate, potentially expensive* step — not a reason the current trivial
-  version must stay manual. The honest upgrade path, in order: auto-import on scan → file watcher →
-  a cook step with `.meta` sidecars → async streaming. Treat the existing `AssetRegistry` /
-  `AssetManagerSingleton` as the seam where that grows.
+- **Where Snowstorm is today:** every importable source has a committed **`<file>.meta` sidecar**
+  (`Assets/AssetMeta.hpp`) that owns its GUID + import settings (a model's submesh GUIDs under
+  `SubAssets`, cf. Unity fileIDs); `AssetRegistry::Scan` (the import step, run at registry load and by
+  the content browser) walks the asset dir, writes missing sidecars, registers parts, and refreshes a
+  **content-hash freshness key** (size+mtime fast path, FNV-1a on change). `AssetRegistry.json` is a
+  machine-local cache of that (gitignored, rebuilt from the sidecars). Mesh/texture/IBL **cook caches**
+  (`Engine/cache/`) key on `SourceKey` = content hash ^ import-settings hash, so editing a source OR
+  an import setting re-cooks. Mesh/texture loads are **async** (JobSystem cook, main-thread upload,
+  placeholder until resident). Still deliberately missing: a file watcher + hot reload (next), streaming
+  under a memory budget, compressed texture formats. Treat `AssetRegistry` / `AssetManagerSingleton`
+  as the seam where that grows.
 
 ## Verify before claiming
 

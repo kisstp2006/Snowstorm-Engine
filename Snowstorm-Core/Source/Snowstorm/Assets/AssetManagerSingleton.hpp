@@ -34,10 +34,22 @@ namespace Snowstorm
 		{
 		}
 
+		// Drains in-flight async loads: worker jobs capture `this` and push into m_Completed* on finish,
+		// so the object must outlive every job it submitted (a World torn down mid-load — smoke exit,
+		// project switch, cold cache after a hot reload — would otherwise be written to after death).
+		~AssetManagerSingleton() override;
+
 		bool LoadRegistry(const std::filesystem::path& filePath);
 		bool SaveRegistry(const std::filesystem::path& filePath) const;
 
 		AssetHandle Import(const std::filesystem::path& path, AssetType type);
+
+		// The import step (AssetRegistry::Scan on the active project's asset directory): gives every
+		// source a .meta, registers it, refreshes freshness, saves the registry cache when it changed.
+		// Returns every file found (scenes included) for the content browser.
+		std::vector<AssetRegistry::ScannedFile> ScanAssets();
+		[[nodiscard]] const AssetRegistry& Registry() const { return m_Registry; }
+		AssetRegistry& Registry() { return m_Registry; }
 
 		// Import a model file (any Assimp format) as a set of renderable entities — one per submesh,
 		// each with Transform + Mesh + Material + Visibility. A per-submesh ".ssmat" is generated next

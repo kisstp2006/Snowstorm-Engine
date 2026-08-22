@@ -1,0 +1,10 @@
+{
+  "Guid": "12112538743247314239",
+  "Import": {
+    "Mesh": {
+      "GenerateCollision": false
+    }
+  },
+  "Type": "Mesh",
+  "Version": 1
+}

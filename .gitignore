@@ -40,11 +40,9 @@ Makefile
 !Scripts/vcpkg-overlays/
 !Scripts/vcpkg-overlays/**
 
-# The asset registry maps the UUID handles in committed scenes to their files. It
-# is project data, not build output, so it must travel with the scenes (despite
-# the blanket *.json ignore) or every fresh checkout renders nothing. The demo
-# content now lives in the Sandbox project, so un-ignore its registry there.
-!Projects/Sandbox/assets/AssetRegistry.json
+# AssetRegistry.json is a machine-local cache rebuilt by the asset scan from the committed
+# `<source>.meta` sidecars (which own the GUIDs scenes reference) — Unity's Library/ folder.
+# It stays ignored via the blanket *.json above; the .meta files are tracked.
 
 # Editor fonts are shipped assets (the NERV theme loads a monospace TTF from here).
 !Engine/Fonts/

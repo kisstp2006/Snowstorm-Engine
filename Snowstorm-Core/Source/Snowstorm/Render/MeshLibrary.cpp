@@ -214,11 +214,11 @@ namespace Snowstorm
 		return lock;
 	}
 
-	std::optional<CookedMesh> MeshLibrary::LoadCookedCPU(const std::string& filepath, const int submeshIndex, const AssetHandle handle)
+	std::optional<CookedMesh> MeshLibrary::LoadCookedCPU(const std::string& filepath, const int submeshIndex, const AssetHandle handle, const uint64_t sourceKey)
 	{
 		// CPU-only: safe on a worker thread. No m_Meshes access (that map holds GPU resources and is
 		// main-thread-only); the caller finalizes on the main thread via FinalizeCooked.
-		const uint64_t sourceTime = GetFileWriteTimeU64(filepath);
+		const uint64_t sourceTime = sourceKey;
 
 		// Fast path: this submesh's cooked blob already on disk (no Assimp).
 		if (auto blob = MeshCacheIO::Load(handle, sourceTime))
@@ -290,7 +290,7 @@ namespace Snowstorm
 		return result;
 	}
 
-	Ref<Mesh> MeshLibrary::LoadCached(const std::string& filepath, const int submeshIndex, const AssetHandle handle)
+	Ref<Mesh> MeshLibrary::LoadCached(const std::string& filepath, const int submeshIndex, const AssetHandle handle, const uint64_t sourceKey)
 	{
 		const std::string cacheKey = filepath + "?submesh=" + std::to_string(submeshIndex);
 		if (const auto it = m_Meshes.find(cacheKey); it != m_Meshes.end())
@@ -298,7 +298,7 @@ namespace Snowstorm
 			return it->second;
 		}
 
-		auto cooked = LoadCookedCPU(filepath, submeshIndex, handle);
+		auto cooked = LoadCookedCPU(filepath, submeshIndex, handle, sourceKey);
 		if (!cooked)
 		{
 			return nullptr;
