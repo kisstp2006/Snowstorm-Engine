@@ -30,8 +30,8 @@ namespace Snowstorm
 	struct WorldTransformComponent;
 	struct CameraVisibilityComponent;
 	struct RenderTargetComponent;
-	struct MeshComponent;
-	struct MaterialComponent;
+	struct MeshRuntimeComponent;
+	struct MaterialRuntimeComponent;
 
 	class RenderSystem final : public System
 	{
@@ -87,7 +87,7 @@ namespace Snowstorm
 		// Must be called inside an active BeginScene (both callers open one first).
 		void DrawVisibleMeshes(FrameContext& fc, const CameraPick& cam,
 		                       const std::function<void(entt::entity, const WorldTransformComponent&,
-		                                                const MeshComponent&, const MaterialComponent&)>& draw);
+		                                                const MeshRuntimeComponent&, const MaterialRuntimeComponent&)>& draw);
 
 	private:
 		// Frame-global IBL bake phase (appended once per frame before the per-viewport loop; the baked maps

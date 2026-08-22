@@ -5,6 +5,7 @@
 #include "Snowstorm/Components/CameraRuntimeComponent.hpp"
 #include "Snowstorm/Components/CameraTargetComponent.hpp"
 #include "Snowstorm/Components/MeshComponent.hpp"
+#include "Snowstorm/Components/MeshRuntimeComponent.hpp"
 #include "Snowstorm/Components/RenderTargetComponent.hpp"
 #include "Snowstorm/Components/TransformComponent.hpp"
 #include "Snowstorm/Components/WorldTransformComponent.hpp"
@@ -142,17 +143,17 @@ namespace Snowstorm
 			entt::entity hit = entt::null;
 			float bestT = std::numeric_limits<float>::max();
 
-			for (auto meshView = reg.view<const MeshComponent, const TransformComponent>();
+			for (auto meshView = reg.view<const MeshRuntimeComponent, const TransformComponent>();
 			     const entt::entity e : meshView)
 			{
-				const auto& mc = reg.Read<MeshComponent>(e);
-				if (!mc.MeshInstance)
+				const auto& mc = reg.Read<MeshRuntimeComponent>(e);
+				if (!mc.Instance)
 				{
 					continue; // not yet resolved -> no bounds to test
 				}
 
 				const glm::mat4 model = CachedWorldMatrix(reg, e);
-				const AABB worldBox = TransformAABB(mc.MeshInstance->GetBounds().Box, model);
+				const AABB worldBox = TransformAABB(mc.Instance->GetBounds().Box, model);
 
 				if (const auto t = RayIntersectsAABB(ray, worldBox); t && *t < bestT)
 				{

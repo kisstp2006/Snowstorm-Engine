@@ -2,6 +2,7 @@
 
 #include "Snowstorm/Assets/AssetManagerSingleton.hpp"
 #include "Snowstorm/Components/MaterialComponent.hpp"
+#include "Snowstorm/Components/MaterialRuntimeComponent.hpp"
 #include "Snowstorm/Components/MaterialOverridesComponent.hpp"
 
 namespace Snowstorm
@@ -56,9 +57,14 @@ namespace Snowstorm
 		auto& reg = m_World->GetRegistry();
 		auto& assets = SingletonView<AssetManagerSingleton>();
 
-		// We want to react when:
-		// - MaterialComponent is Added/Changed
-		// - MaterialOverridesComponent is Added/Changed
+		for (const entt::entity e : FiniView<MaterialComponent>())
+		{
+			if (reg.valid(e) && reg.any_of<MaterialRuntimeComponent>(e))
+			{
+				reg.remove<MaterialRuntimeComponent>(e);
+			}
+		}
+
 		std::unordered_set<entt::entity> dirty;
 
 		for (auto e : InitView<MaterialComponent>())
@@ -69,36 +75,44 @@ namespace Snowstorm
 			dirty.insert(e);
 		for (auto e : ChangedView<MaterialOverridesComponent>())
 			dirty.insert(e);
+		for (auto e : FiniView<MaterialOverridesComponent>())
+			dirty.insert(e);
 
-		// Re-attempt entities that couldn't resolve on a previous frame because their pipeline wasn't ready
-		// (shaders compiling async). Cleared and rebuilt below as each either resolves or stays pending.
 		for (const entt::entity e : m_PendingResolve)
 			dirty.insert(e);
 		m_PendingResolve.clear();
 
+		// Safety net (hot reload / async readiness): a runtime component whose instance is missing or was
+		// resolved from a different handle re-resolves without waiting for a Changed event.
+		for (auto view = reg.view<MaterialComponent>(); const entt::entity e : view)
+		{
+			const AssetHandle handle = reg.Read<MaterialComponent>(e).Material;
+			auto& rt = reg.Ensure<MaterialRuntimeComponent>(e);
+			if (rt.ResolvedFrom != handle.Value() || (!rt.Instance && handle.Value() != 0))
+			{
+				dirty.insert(e);
+			}
+		}
+
 		for (const entt::entity e : dirty)
 		{
-			if (!reg.any_of<MaterialComponent>(e))
+			if (!reg.valid(e) || !reg.any_of<MaterialComponent>(e))
 			{
 				continue;
 			}
 
-			const auto& mcRead = reg.Read<MaterialComponent>(e);
-			if (mcRead.Material == 0)
+			const AssetHandle handle = reg.Read<MaterialComponent>(e).Material;
+			if (handle.Value() == 0)
 			{
-				// Clear runtime cache if no asset
-				auto& mc = reg.Write<MaterialComponent>(e);
-				mc.MaterialInstance.reset();
+				reg.patch<MaterialRuntimeComponent>(e, [](MaterialRuntimeComponent& rt)
+				                                    {
+					rt.Instance.reset();
+					rt.ResolvedFrom = 0;
+					rt.Unique = false; });
 				continue;
 			}
 
-			const bool hasOverrides = reg.any_of<MaterialOverridesComponent>(e);
-			const MaterialOverridesComponent* ov = hasOverrides ? reg.try_get_const<MaterialOverridesComponent>(e) : nullptr;
-
-			// Pre-warm albedo-override textures here (resolve phase), so RenderSystem's lookup during
-			// command recording is a pure cache hit. Async: this registers a stable placeholder bindless
-			// slot immediately (safe outside the render pass) and loads the real pixels on a worker; the
-			// slot is rewritten in place when the decode finishes, so nothing re-registers mid-render.
+			const MaterialOverridesComponent* ov = reg.try_get_const<MaterialOverridesComponent>(e);
 			if (ov)
 			{
 				for (const MaterialOverride& o : ov->Overrides)
@@ -110,40 +124,24 @@ namespace Snowstorm
 				}
 			}
 
-			// Only overrides that can't ride the per-instance buffer (e.g. BaseColor) force a unique
-			// instance. Texture-only albedo overrides stay on the shared instance so objects batch.
 			const bool needsUnique = (ov && NeedsUniqueInstance(*ov));
-
-			if (!needsUnique)
+			Ref<MaterialInstance> instance = needsUnique ? assets.CreateMaterialInstanceUnique(handle)
+			                                             : assets.GetMaterialInstance(handle);
+			if (!instance)
 			{
-				// Shared instance — objects with the same material (even with per-instance albedo
-				// overrides) collapse into one instanced draw.
-				const Ref<MaterialInstance> shared = assets.GetMaterialInstance(mcRead.Material);
-				// Null = pipeline not ready (shader still compiling). Retry next frame instead of leaving it
-				// permanently unresolved; don't overwrite a previously-resolved instance with null.
-				if (!shared)
-				{
-					m_PendingResolve.insert(e);
-					continue;
-				}
-				auto& mc = reg.Write<MaterialComponent>(e);
-				mc.MaterialInstance = shared;
+				m_PendingResolve.insert(e); // shader/pipeline not ready yet
 				continue;
 			}
-
-			// Per-entity unique instance
-			Ref<MaterialInstance> unique = assets.CreateMaterialInstanceUnique(mcRead.Material);
-			if (!unique)
+			if (needsUnique)
 			{
-				// Pipeline not ready yet (shader compiling) — retry next frame.
-				m_PendingResolve.insert(e);
-				continue;
+				ApplyOverrides(assets, *ov, *instance);
 			}
 
-			ApplyOverrides(assets, *ov, *unique);
-
-			auto& mc = reg.Write<MaterialComponent>(e);
-			mc.MaterialInstance = unique;
+			reg.patch<MaterialRuntimeComponent>(e, [&](MaterialRuntimeComponent& rt)
+			                                    {
+				rt.Instance = instance;
+				rt.ResolvedFrom = handle.Value();
+				rt.Unique = needsUnique; });
 		}
 	}
 }

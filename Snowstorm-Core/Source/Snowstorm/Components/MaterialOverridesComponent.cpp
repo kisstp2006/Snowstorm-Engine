@@ -166,16 +166,18 @@ namespace Snowstorm
 		    value("Color", MaterialOverrideType::Color),
 		    value("Texture", MaterialOverrideType::Texture));
 
-		// The override list is serialized by the SceneSerializer override path (sparse JSON array),
-		// not by reflecting these fields; registration is kept for tooling/introspection.
+		// Reflected so the generic JSON path serializes the sparse override list as an array of these
+		// (as_object: the serializer rebuilds elements by value inside the vector).
 		registration::class_<MaterialOverride>("Snowstorm::MaterialOverride")
+		    .constructor()(policy::ctor::as_object)
 		    .property("Name", &MaterialOverride::Name)
 		    .property("Type", &MaterialOverride::Type)
 		    .property("Scalar", &MaterialOverride::Scalar)
 		    .property("Color", &MaterialOverride::Color)
 		    .property("Texture", &MaterialOverride::Texture);
 
-		registration::class_<MaterialOverridesComponent>("Snowstorm::MaterialOverridesComponent");
+		registration::class_<MaterialOverridesComponent>("Snowstorm::MaterialOverridesComponent")
+		    .property("Overrides", &MaterialOverridesComponent::Overrides);
 	}
 
 	namespace

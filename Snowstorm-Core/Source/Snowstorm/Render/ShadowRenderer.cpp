@@ -1,7 +1,7 @@
 #include "ShadowRenderer.hpp"
 
-#include "Snowstorm/Components/MaterialComponent.hpp"
-#include "Snowstorm/Components/MeshComponent.hpp"
+#include "Snowstorm/Components/MaterialRuntimeComponent.hpp"
+#include "Snowstorm/Components/MeshRuntimeComponent.hpp"
 #include "Snowstorm/Components/WorldTransformComponent.hpp"
 #include "Snowstorm/Components/VisibilityComponents.hpp"
 #include "Snowstorm/Core/EngineCVars.hpp"
@@ -73,17 +73,17 @@ namespace Snowstorm
 				                  r.BeginScene(lightCam, glm::vec3(0.0f), fc.Ctx, fc.FrameIndex);
 
 				                  // Accumulate ALL renderable meshes as shadow casters (resolved instances).
-				                  for (const auto casters = reg.view<const WorldTransformComponent, const MeshComponent, const MaterialComponent, const VisibilityComponent>();
+				                  for (const auto casters = reg.view<const WorldTransformComponent, const MeshRuntimeComponent, const MaterialRuntimeComponent, const VisibilityComponent>();
 				                       const auto e : casters)
 				                  {
-					                  const auto& mesh = reg.Read<MeshComponent>(e);
-					                  const auto& mat = reg.Read<MaterialComponent>(e);
-					                  if (!mesh.MeshInstance || !mat.MaterialInstance)
+					                  const auto& mesh = reg.Read<MeshRuntimeComponent>(e);
+					                  const auto& mat = reg.Read<MaterialRuntimeComponent>(e);
+					                  if (!mesh.Instance || !mat.Instance)
 					                  {
 						                  continue;
 					                  }
 					                  r.DrawMesh(reg.Read<WorldTransformComponent>(e).LocalToWorld,
-					                             mesh.MeshInstance, mat.MaterialInstance);
+					                             mesh.Instance, mat.Instance);
 				                  }
 
 				                  m_ShadowPass.RecordDepth(r, shadowDepthFmt, lightViewProj);
@@ -138,17 +138,17 @@ namespace Snowstorm
 				                  lightCam.ViewProjection = glm::mat4(1.0f);
 				                  r.BeginScene(lightCam, glm::vec3(0.0f), fc.Ctx, fc.FrameIndex);
 
-				                  for (const auto casters = reg.view<const WorldTransformComponent, const MeshComponent, const MaterialComponent, const VisibilityComponent>();
+				                  for (const auto casters = reg.view<const WorldTransformComponent, const MeshRuntimeComponent, const MaterialRuntimeComponent, const VisibilityComponent>();
 				                       const auto e : casters)
 				                  {
-					                  const auto& mesh = reg.Read<MeshComponent>(e);
-					                  const auto& mat = reg.Read<MaterialComponent>(e);
-					                  if (!mesh.MeshInstance || !mat.MaterialInstance)
+					                  const auto& mesh = reg.Read<MeshRuntimeComponent>(e);
+					                  const auto& mat = reg.Read<MaterialRuntimeComponent>(e);
+					                  if (!mesh.Instance || !mat.Instance)
 					                  {
 						                  continue;
 					                  }
 					                  r.DrawMesh(reg.Read<WorldTransformComponent>(e).LocalToWorld,
-					                             mesh.MeshInstance, mat.MaterialInstance);
+					                             mesh.Instance, mat.Instance);
 				                  }
 
 				                  // Render each shadow-casting spot into its tile: scissor+viewport to the tile
@@ -208,17 +208,17 @@ namespace Snowstorm
 			                  lightCam.ViewProjection = glm::mat4(1.0f);
 			                  r.BeginScene(lightCam, glm::vec3(0.0f), fc.Ctx, fc.FrameIndex);
 
-			                  for (const auto casters = reg.view<const WorldTransformComponent, const MeshComponent, const MaterialComponent, const VisibilityComponent>();
+			                  for (const auto casters = reg.view<const WorldTransformComponent, const MeshRuntimeComponent, const MaterialRuntimeComponent, const VisibilityComponent>();
 			                       const auto e : casters)
 			                  {
-				                  const auto& mesh = reg.Read<MeshComponent>(e);
-				                  const auto& mat = reg.Read<MaterialComponent>(e);
-				                  if (!mesh.MeshInstance || !mat.MaterialInstance)
+				                  const auto& mesh = reg.Read<MeshRuntimeComponent>(e);
+				                  const auto& mat = reg.Read<MaterialRuntimeComponent>(e);
+				                  if (!mesh.Instance || !mat.Instance)
 				                  {
 					                  continue;
 				                  }
 				                  r.DrawMesh(reg.Read<WorldTransformComponent>(e).LocalToWorld,
-				                             mesh.MeshInstance, mat.MaterialInstance);
+				                             mesh.Instance, mat.Instance);
 			                  }
 
 			                  // Render each casting point's 6 cube faces, each into tile (slot*6 + face): scissor

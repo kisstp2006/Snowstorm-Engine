@@ -8,6 +8,7 @@
 #include "Snowstorm/Components/CameraTargetComponent.hpp"
 #include "Snowstorm/Components/DoNotSerializeComponent.hpp"
 #include "Snowstorm/Components/MeshComponent.hpp"
+#include "Snowstorm/Components/MeshRuntimeComponent.hpp"
 #include "Snowstorm/Components/TransformComponent.hpp"
 #include "Snowstorm/World/Entity.hpp"
 #include "Snowstorm/Math/CameraFraming.hpp"
@@ -20,7 +21,7 @@ namespace Snowstorm
 {
 	namespace
 	{
-		// World-space AABB of one entity's mesh. Uses the ALREADY-RESOLVED MeshInstance (populated
+		// World-space AABB of one entity's mesh. Uses the ALREADY-RESOLVED MeshRuntimeComponent (populated
 		// asynchronously by MeshResolveSystem) — it must NOT call the blocking AssetManager::GetMesh:
 		// this runs every frame from ComputeWorldRenderableAABB (shadow fitting), and a synchronous
 		// GetMesh here would load every scene mesh's GPU data on the first shadow frame, blocking the
@@ -30,12 +31,12 @@ namespace Snowstorm
 		bool EntityAABB(World& world, const entt::entity e, AABB& out)
 		{
 			auto& reg = world.GetRegistry();
-			if (!reg.all_of<MeshComponent, TransformComponent>(e))
+			if (!reg.all_of<MeshRuntimeComponent, TransformComponent>(e))
 			{
 				return false;
 			}
 
-			const Ref<Mesh>& mesh = reg.Read<MeshComponent>(e).MeshInstance;
+			const Ref<Mesh>& mesh = reg.Read<MeshRuntimeComponent>(e).Instance;
 			if (!mesh)
 			{
 				return false; // not resolved yet — skip until it streams in
@@ -53,7 +54,7 @@ namespace Snowstorm
 		AABB acc{glm::vec3(std::numeric_limits<float>::max()), glm::vec3(std::numeric_limits<float>::lowest())};
 		bool any = false;
 
-		for (const auto view = reg.view<MeshComponent, TransformComponent>(); const entt::entity e : view)
+		for (const auto view = reg.view<MeshRuntimeComponent, TransformComponent>(); const entt::entity e : view)
 		{
 			AABB box;
 			if (!EntityAABB(world, e, box))

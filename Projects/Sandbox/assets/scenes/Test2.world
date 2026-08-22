@@ -3,10 +3,10 @@
     {
       "Components": {
         "Snowstorm::MaterialComponent": {
-          "$asset": "14863079243352112687"
+          "Material": "14863079243352112687"
         },
         "Snowstorm::MeshComponent": {
-          "$asset": "12112538743247314239"
+          "Mesh": "12112538743247314239"
         },
         "Snowstorm::TransformComponent": {
           "Position": [

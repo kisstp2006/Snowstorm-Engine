@@ -3,6 +3,8 @@
 #include "Snowstorm/Assets/AssetManagerSingleton.hpp"
 #include "Snowstorm/Components/MaterialComponent.hpp"
 #include "Snowstorm/Components/MeshComponent.hpp"
+#include "Snowstorm/Components/MeshRuntimeComponent.hpp"
+#include "Snowstorm/Components/MaterialRuntimeComponent.hpp"
 #include "Snowstorm/Components/TransformComponent.hpp"
 #include "Snowstorm/Components/WorldTransformComponent.hpp"
 #include "Snowstorm/Core/EngineCVars.hpp"
@@ -27,11 +29,11 @@ namespace Snowstorm
 		// PLACEMENT changes (the transform of a MESH entity moved).
 		//
 		// Add/remove are one-shot events (spawn/despawn) — cheap to over-trigger, so left unfiltered.
-		if (!ChangedView<MeshComponent>().empty()) // mesh resolved / swapped
+		if (!ChangedView<MeshRuntimeComponent>().empty()) // mesh resolved / swapped
 			return true;
-		if (!InitView<MeshComponent>().empty() || !InitView<WorldTransformComponent>().empty())
+		if (!InitView<MeshRuntimeComponent>().empty() || !InitView<WorldTransformComponent>().empty())
 			return true;
-		if (!FiniView<MeshComponent>().empty() || !FiniView<WorldTransformComponent>().empty())
+		if (!FiniView<MeshRuntimeComponent>().empty() || !FiniView<WorldTransformComponent>().empty())
 			return true;
 
 		// A whole-entity DESTROY (editor delete, despawn) is tracked separately from component removal —
@@ -50,7 +52,7 @@ namespace Snowstorm
 		// below) and, without this check, never refreshes when the material lands, leaving GI/reflections lit
 		// with wrong albedo until something else re-dirties the scene (the "toggle GI/refl off+on fixes it"
 		// bug). Optimized shaders (slower cold compile) made this window reliably straddle the first build.
-		if (!ChangedView<MaterialComponent>().empty())
+		if (!ChangedView<MaterialRuntimeComponent>().empty())
 			return true;
 
 		// Placement change is the PER-FRAME hot path: only a changed transform that belongs to a mesh entity
@@ -60,7 +62,7 @@ namespace Snowstorm
 		const auto& reg = m_World->GetRegistry();
 		for (const entt::entity e : ChangedView<WorldTransformComponent>())
 		{
-			if (reg.all_of<MeshComponent>(e))
+			if (reg.all_of<MeshRuntimeComponent>(e))
 			{
 				return true;
 			}
@@ -130,10 +132,10 @@ namespace Snowstorm
 		const bool ommDevice = Renderer::IsOpacityMicromapSupported() && ommEnabled;
 		constexpr uint32_t kOmmSubdivisionLevel = 3;
 		uint32_t ommDeferred = 0; // cutout instances on the any-hit fallback this frame because their albedo isn't resident
-		for (auto view = reg.view<WorldTransformComponent, MeshComponent>(); const entt::entity e : view)
+		for (auto view = reg.view<WorldTransformComponent, MeshRuntimeComponent>(); const entt::entity e : view)
 		{
-			const auto& mc = reg.Read<MeshComponent>(e);
-			if (!mc.MeshInstance) // mesh not resolved yet (async load in flight)
+			const auto& mc = reg.Read<MeshRuntimeComponent>(e);
+			if (!mc.Instance) // mesh not resolved yet (async load in flight)
 			{
 				continue;
 			}
@@ -142,9 +144,9 @@ namespace Snowstorm
 			// instance (which picks the OMM BLAS and drops FORCE_NO_OPAQUE). May be null (async) — then the
 			// record stays a BaseColor-white fallback and the instance is treated as opaque.
 			const Material::Constants* c = nullptr;
-			if (const auto* matc = reg.try_get_const<MaterialComponent>(e); matc && matc->MaterialInstance)
+			if (const auto* matc = reg.try_get_const<MaterialRuntimeComponent>(e); matc && matc->Instance)
 			{
-				c = &matc->MaterialInstance->GetConstants();
+				c = &matc->Instance->GetConstants();
 			}
 			const bool masked = c && c->AlphaMaskEnabled != 0;
 			// The OMM bakes the albedo alpha ONCE at BLAS build and caches the result. If the albedo texture isn't
@@ -164,13 +166,13 @@ namespace Snowstorm
 			bool ommBuilt = false;
 			if (useOmm)
 			{
-				blas = mc.MeshInstance->GetOrBuildOmmBlas(kOmmSubdivisionLevel, c->AlbedoTextureIndex, c->AlphaCutoff,
+				blas = mc.Instance->GetOrBuildOmmBlas(kOmmSubdivisionLevel, c->AlbedoTextureIndex, c->AlphaCutoff,
 				                                          c->BaseColor.a);
 				ommBuilt = blas != nullptr;
 			}
 			if (!ommBuilt)
 			{
-				blas = mc.MeshInstance->GetOrBuildBLAS();
+				blas = mc.Instance->GetOrBuildBLAS();
 			}
 			if (!blas)
 			{
@@ -186,8 +188,8 @@ namespace Snowstorm
 			instances.back().ForceNonOpaque = masked && !ommBuilt;
 
 			GeometryRecord rec{};
-			rec.VertexAddress = mc.MeshInstance->GetVertexBuffer()->GetGPUAddress();
-			rec.IndexAddress = mc.MeshInstance->GetIndexBuffer()->GetGPUAddress();
+			rec.VertexAddress = mc.Instance->GetVertexBuffer()->GetGPUAddress();
+			rec.IndexAddress = mc.Instance->GetIndexBuffer()->GetGPUAddress();
 			rec.Model = model;
 			if (c)
 			{

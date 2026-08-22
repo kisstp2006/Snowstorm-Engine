@@ -295,7 +295,7 @@ namespace Snowstorm
 		{
 			return [meshHandle](Entity e, const glm::vec3&)
 			{
-				e.AddComponent<MeshComponent>().MeshHandle = AssetHandle{meshHandle};
+				e.AddComponent<MeshComponent>().Mesh = AssetHandle{meshHandle};
 				e.AddComponent<MaterialComponent>().Material = AssetHandle{kWhiteMaterialHandle};
 				e.AddComponent<VisibilityComponent>();
 			};

@@ -1005,14 +1005,12 @@ namespace Snowstorm
 
 			{
 				auto& mc = e.AddOrReplaceComponent<MeshComponent>();
-				mc.MeshHandle = meshH;
-				mc.MeshInstance.reset(); // runtime-resolved (MeshResolveSystem)
+				mc.Mesh = meshH;
 			}
 
 			{
 				auto& matc = e.AddOrReplaceComponent<MaterialComponent>();
 				matc.Material = matH;
-				matc.MaterialInstance.reset(); // runtime-resolved (MaterialResolveSystem)
 			}
 
 			{

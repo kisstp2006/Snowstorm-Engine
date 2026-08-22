@@ -312,12 +312,10 @@ namespace Snowstorm
 			e.AddComponent<TransformComponent>(); // identity: vertices are already pre-transformed
 
 			auto& mc = e.AddComponent<MeshComponent>();
-			mc.MeshHandle = meshHandle;
-			mc.MeshInstance.reset(); // resolved by MeshResolveSystem
+			mc.Mesh = meshHandle;
 
 			auto& matc = e.AddComponent<MaterialComponent>();
 			matc.Material = matHandle;
-			matc.MaterialInstance.reset(); // resolved by MaterialResolveSystem
 
 			e.AddComponent<VisibilityComponent>().Mask = Visibility::Scene | Visibility::Game;
 

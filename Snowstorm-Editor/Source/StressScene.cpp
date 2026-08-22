@@ -37,12 +37,10 @@ namespace Snowstorm
 			tr.Scale = scale;
 
 			auto& mc = e.AddComponent<MeshComponent>();
-			mc.MeshHandle = mesh;
-			mc.MeshInstance.reset();
+			mc.Mesh = mesh;
 
 			auto& matc = e.AddComponent<MaterialComponent>();
 			matc.Material = material;
-			matc.MaterialInstance.reset();
 
 			e.AddComponent<VisibilityComponent>().Mask = Visibility::Scene | Visibility::Game;
 			return e;

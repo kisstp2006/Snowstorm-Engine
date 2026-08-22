@@ -69,29 +69,38 @@
     {
       "Components": {
         "Snowstorm::MaterialComponent": {
-          "$asset": "14863079243352112687"
+          "Material": "14863079243352112687"
         },
         "Snowstorm::MaterialOverridesComponent": {
           "Overrides": [
             {
               "Name": "AlbedoTexture",
               "Type": "Texture",
-              "Value": "12465655103903380530"
+              "Scalar": 0.0,
+              "Color": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+              ],
+              "Texture": "12465655103903380530"
             },
             {
               "Name": "BaseColor",
               "Type": "Color",
-              "Value": [
+              "Scalar": 0.0,
+              "Color": [
                 0.1141020655632019,
                 0.32128915190696716,
                 0.9324894547462463,
                 1.0
-              ]
+              ],
+              "Texture": "0"
             }
           ]
         },
         "Snowstorm::MeshComponent": {
-          "$asset": "14167707854468761414"
+          "Mesh": "14167707854468761414"
         },
         "Snowstorm::TransformComponent": {
           "Position": [
@@ -121,10 +130,10 @@
     {
       "Components": {
         "Snowstorm::MaterialComponent": {
-          "$asset": "13869174114393927166"
+          "Material": "13869174114393927166"
         },
         "Snowstorm::MeshComponent": {
-          "$asset": "14167707854468761414"
+          "Mesh": "14167707854468761414"
         },
         "Snowstorm::TransformComponent": {
           "Position": [
@@ -154,19 +163,26 @@
     {
       "Components": {
         "Snowstorm::MaterialComponent": {
-          "$asset": "14863079243352112687"
+          "Material": "14863079243352112687"
         },
         "Snowstorm::MaterialOverridesComponent": {
           "Overrides": [
             {
               "Name": "AlbedoTexture",
               "Type": "Texture",
-              "Value": "12465655103903380530"
+              "Scalar": 0.0,
+              "Color": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+              ],
+              "Texture": "12465655103903380530"
             }
           ]
         },
         "Snowstorm::MeshComponent": {
-          "$asset": "5810267832183663728"
+          "Mesh": "5810267832183663728"
         },
         "Snowstorm::RotatorComponent": {
           "Axis": [
@@ -204,10 +220,10 @@
     {
       "Components": {
         "Snowstorm::MaterialComponent": {
-          "$asset": "13869174114393927166"
+          "Material": "13869174114393927166"
         },
         "Snowstorm::MeshComponent": {
-          "$asset": "12112538743247314239"
+          "Mesh": "12112538743247314239"
         },
         "Snowstorm::TransformComponent": {
           "Position": [

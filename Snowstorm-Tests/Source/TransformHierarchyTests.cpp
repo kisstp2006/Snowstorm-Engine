@@ -3,6 +3,9 @@
 
 #include "Snowstorm/Components/HierarchyComponent.hpp"
 #include "Snowstorm/Components/IDComponent.hpp"
+#include "Snowstorm/Components/MaterialComponent.hpp"
+#include "Snowstorm/Components/MaterialOverridesComponent.hpp"
+#include "Snowstorm/Components/MeshComponent.hpp"
 #include "Snowstorm/Components/TagComponent.hpp"
 #include "Snowstorm/Components/TransformComponent.hpp"
 #include "Snowstorm/Components/WorldTransformComponent.hpp"
@@ -258,4 +261,35 @@ TEST_CASE("DeleteEntityCommand restores the whole subtree with its links", "[hie
 	world.FlushDestroyQueue();
 	REQUIRE_FALSE(world.FindEntityByUUID(pid).IsValid());
 	REQUIRE_FALSE(world.FindEntityByUUID(cid).IsValid());
+}
+
+TEST_CASE("Asset handles and material override lists serialize through the generic RTTR path", "[serialize]")
+{
+	World src;
+	Entity e = src.CreateEntity("Renderable");
+	e.AddComponent<MeshComponent>().Mesh = Snowstorm::UUID{5810267832183663728ull};
+	e.AddComponent<MaterialComponent>().Material = Snowstorm::UUID{14863079243352112687ull};
+	auto& ov = e.AddComponent<MaterialOverridesComponent>();
+	ov.Overrides.push_back({"BaseColor", MaterialOverrideType::Color, 0.0f, glm::vec4(0.1f, 0.2f, 0.3f, 1.0f), Snowstorm::UUID{0}});
+	ov.Overrides.push_back({"AlbedoTexture", MaterialOverrideType::Texture, 0.0f, glm::vec4(1.0f), Snowstorm::UUID{12465655103903380530ull}});
+
+	nlohmann::json snap;
+	REQUIRE(SceneSerializer::SerializeEntity(e, snap));
+	const auto& comps = snap["Components"];
+	REQUIRE(comps["Snowstorm::MeshComponent"]["Mesh"] == "5810267832183663728");
+	REQUIRE(comps["Snowstorm::MaterialComponent"]["Material"] == "14863079243352112687");
+	REQUIRE(comps["Snowstorm::MaterialOverridesComponent"]["Overrides"].size() == 2);
+	REQUIRE_FALSE(comps.contains("Snowstorm::MeshRuntimeComponent")); // runtime twins never hit the file
+
+	World dst;
+	const Entity r = SceneSerializer::DeserializeEntity(dst, snap);
+	REQUIRE(r.GetComponent<MeshComponent>().Mesh.Value() == 5810267832183663728ull);
+	REQUIRE(r.GetComponent<MaterialComponent>().Material.Value() == 14863079243352112687ull);
+	const auto& rov = r.GetComponent<MaterialOverridesComponent>().Overrides;
+	REQUIRE(rov.size() == 2);
+	REQUIRE(rov[0].Name == "BaseColor");
+	REQUIRE(rov[0].Type == MaterialOverrideType::Color);
+	REQUIRE(rov[0].Color == glm::vec4(0.1f, 0.2f, 0.3f, 1.0f));
+	REQUIRE(rov[1].Type == MaterialOverrideType::Texture);
+	REQUIRE(rov[1].Texture.Value() == 12465655103903380530ull);
 }

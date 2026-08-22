@@ -1,14 +1,13 @@
-﻿#pragma once
+#pragma once
 
 #include "Snowstorm/Assets/AssetTypes.hpp"
-#include "Snowstorm/Core/Base.hpp"
-#include "Snowstorm/Render/MaterialInstance.hpp"
 
 namespace Snowstorm
 {
+	// Authored material reference (asset handle). The resolved MaterialInstance lives in
+	// MaterialRuntimeComponent, filled by MaterialResolveSystem.
 	struct MaterialComponent
 	{
-		Ref<MaterialInstance> MaterialInstance;
 		AssetHandle Material{0};
 	};
 }

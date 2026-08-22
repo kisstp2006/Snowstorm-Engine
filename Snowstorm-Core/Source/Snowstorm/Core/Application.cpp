@@ -189,8 +189,11 @@ namespace Snowstorm
 					const double frame = statAccumMs / n;
 					const double wait = statWaitMs / n;
 					const double gpu = statGpuMs / n;
-					SS_CORE_INFO("FrameStats: frame={0:.2f}ms  cpu-submit={1:.2f}ms  gpu-wait={2:.2f}ms  gpu-exec={3:.2f}ms",
-					             frame, frame - wait, wait, gpu);
+					// Draw/triangle counts of the last scene pass ride along: a headless run can prove that the
+					// resolve systems produced renderable entities (0 draws on a loaded scene = a broken resolve).
+					const auto& rs = m_ServiceManager->GetService<RendererService>().GetStats();
+					SS_CORE_INFO("FrameStats: frame={0:.2f}ms  cpu-submit={1:.2f}ms  gpu-wait={2:.2f}ms  gpu-exec={3:.2f}ms  draws={4}  tris={5}",
+					             frame, frame - wait, wait, gpu, rs.DrawCalls, rs.Triangles);
 					statAccumMs = statWaitMs = statGpuMs = 0.0;
 					statFrames = 0;
 				}

@@ -7,6 +7,8 @@
 #include "Snowstorm/Components/TransformComponent.hpp"
 #include "Snowstorm/Components/WorldTransformComponent.hpp"
 #include "Snowstorm/Components/MeshComponent.hpp"
+#include "Snowstorm/Components/MeshRuntimeComponent.hpp"
+#include "Snowstorm/Components/MaterialRuntimeComponent.hpp"
 #include "Snowstorm/Components/MaterialComponent.hpp"
 #include "Snowstorm/Components/VisibilityComponents.hpp"
 
@@ -39,9 +41,9 @@ namespace Snowstorm
 			return true;
 
 		// Mesh/material resolution changes can change what is drawable (null -> valid, material swap, etc.)
-		if (!ChangedView<MeshComponent>().empty())
+		if (!ChangedView<MeshRuntimeComponent>().empty())
 			return true;
-		if (!ChangedView<MaterialComponent>().empty())
+		if (!ChangedView<MaterialRuntimeComponent>().empty())
 			return true;
 
 		// Any relevant component added/removed?
@@ -49,9 +51,9 @@ namespace Snowstorm
 			return true;
 		if (!InitView<CameraComponent>().empty())
 			return true;
-		if (!InitView<MeshComponent>().empty())
+		if (!InitView<MeshRuntimeComponent>().empty())
 			return true;
-		if (!InitView<MaterialComponent>().empty())
+		if (!InitView<MaterialRuntimeComponent>().empty())
 			return true;
 		if (!InitView<VisibilityComponent>().empty())
 			return true;
@@ -66,9 +68,9 @@ namespace Snowstorm
 			return true;
 		if (!FiniView<CameraComponent>().empty())
 			return true;
-		if (!FiniView<MeshComponent>().empty())
+		if (!FiniView<MeshRuntimeComponent>().empty())
 			return true;
-		if (!FiniView<MaterialComponent>().empty())
+		if (!FiniView<MaterialRuntimeComponent>().empty())
 			return true;
 		if (!FiniView<VisibilityComponent>().empty())
 			return true;
@@ -98,7 +100,7 @@ namespace Snowstorm
 		// Renderables we cull (meshes). Snapshot the candidate set ONCE into a contiguous array: it's the
 		// same for every camera (only the frustum/mask differ), and ParallelGather needs an index-able
 		// range to slice across workers (an EnTT multi-component view isn't random-access).
-		const auto meshView = reg.view<WorldTransformComponent, MeshComponent, MaterialComponent, VisibilityComponent>();
+		const auto meshView = reg.view<WorldTransformComponent, MeshRuntimeComponent, MaterialRuntimeComponent, VisibilityComponent>();
 		const std::vector<entt::entity> candidates(meshView.begin(), meshView.end());
 
 		auto& jobs = Application::Get().GetServiceManager().GetService<JobSystem>();
@@ -134,12 +136,12 @@ namespace Snowstorm
 			    [&](const size_t i, auto&& emit)
 			    {
 				    const entt::entity e = candidates[i];
-				    const auto& mesh = reg.Read<MeshComponent>(e);
-				    const auto& mat = reg.Read<MaterialComponent>(e);
+				    const auto& mesh = reg.Read<MeshRuntimeComponent>(e);
+				    const auto& mat = reg.Read<MaterialRuntimeComponent>(e);
 				    const auto& vis = reg.Read<VisibilityComponent>(e);
 
 				    // Must be resolved
-				    if (!mesh.MeshInstance || !mat.MaterialInstance)
+				    if (!mesh.Instance || !mat.Instance)
 				    {
 					    return;
 				    }
@@ -156,7 +158,7 @@ namespace Snowstorm
 				    // Frustum culling
 				    const glm::mat4 M = reg.Read<WorldTransformComponent>(e).LocalToWorld;
 
-				    const MeshBounds& localB = mesh.MeshInstance->GetBounds();
+				    const MeshBounds& localB = mesh.Instance->GetBounds();
 
 				    // Sphere first (cheap)
 				    const Sphere ws = TransformSphere(localB.Sphere, M);

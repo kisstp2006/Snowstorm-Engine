@@ -1,14 +1,13 @@
-﻿#pragma once
+#pragma once
 
-#include "Snowstorm/Core/Base.hpp"
-#include "Snowstorm/Render/Mesh.hpp"
 #include "Snowstorm/Assets/AssetTypes.hpp"
 
 namespace Snowstorm
 {
+	// Authored mesh reference (asset handle). The resolved GPU mesh lives in MeshRuntimeComponent,
+	// filled by MeshResolveSystem (Unity DOTS authoring vs runtime component; Unreal UPROPERTY(Transient)).
 	struct MeshComponent
 	{
-		Ref<Mesh> MeshInstance;
-		AssetHandle MeshHandle{0};
+		AssetHandle Mesh{0};
 	};
 }

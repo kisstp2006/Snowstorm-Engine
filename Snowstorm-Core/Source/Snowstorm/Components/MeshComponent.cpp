@@ -13,7 +13,7 @@ namespace Snowstorm
 
 		registration::class_<MeshComponent>("Snowstorm::MeshComponent")
 		    .constructor()
-		    .property("Mesh", &MeshComponent::MeshHandle)(
+		    .property("Mesh", &MeshComponent::Mesh)(
 		        metadata("AssetType", static_cast<int>(AssetType::Mesh)) // inspector asset picker filter
 		    );
 	}

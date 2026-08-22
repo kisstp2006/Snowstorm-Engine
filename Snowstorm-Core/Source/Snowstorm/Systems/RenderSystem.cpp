@@ -7,6 +7,8 @@
 #include "Snowstorm/Components/MaterialComponent.hpp"
 #include "Snowstorm/Components/MaterialOverridesComponent.hpp"
 #include "Snowstorm/Components/MeshComponent.hpp"
+#include "Snowstorm/Components/MeshRuntimeComponent.hpp"
+#include "Snowstorm/Components/MaterialRuntimeComponent.hpp"
 #include "Snowstorm/Components/PrevTransformComponent.hpp"
 #include "Snowstorm/Components/RenderTargetComponent.hpp"
 #include "Snowstorm/Components/TransformComponent.hpp"
@@ -98,8 +100,8 @@ namespace Snowstorm
 		// Meshes have visibility
 		const auto meshView = View<
 		    const WorldTransformComponent,
-		    const MeshComponent,
-		    const MaterialComponent,
+		    const MeshRuntimeComponent,
+		    const MaterialRuntimeComponent,
 		    const VisibilityComponent>();
 
 		// Swapchain may be unavailable (e.g. minimized / mid-resize). Skip the whole frame cleanly;
@@ -544,7 +546,7 @@ namespace Snowstorm
 
 	void RenderSystem::DrawVisibleMeshes(FrameContext& fc, const CameraPick& cam,
 	                                     const std::function<void(entt::entity, const WorldTransformComponent&,
-	                                                              const MeshComponent&, const MaterialComponent&)>& draw)
+	                                                              const MeshRuntimeComponent&, const MaterialRuntimeComponent&)>& draw)
 	{
 		for (const auto& cache = fc.Reg.Read<VisibilityCacheComponent>(cam.Entity);
 		     const entt::entity e : cache.VisibleMeshes)
@@ -552,17 +554,17 @@ namespace Snowstorm
 			// VisibleMeshes is a cross-frame cache of handles; an entity in it can be gone or stripped of its
 			// components (e.g. New Scene wiped the scene THIS frame, before the cache was rebuilt). Skip stale
 			// handles rather than Read a destroyed entity (EnTT asserts "Set does not contain entity").
-			if (!fc.Reg.valid(e) || !fc.Reg.all_of<WorldTransformComponent, MeshComponent, MaterialComponent>(e))
+			if (!fc.Reg.valid(e) || !fc.Reg.all_of<WorldTransformComponent, MeshRuntimeComponent, MaterialRuntimeComponent>(e))
 			{
 				continue;
 			}
 			const auto& tr = fc.Reg.Read<WorldTransformComponent>(e);
-			const auto& mesh = fc.Reg.Read<MeshComponent>(e);
-			const auto& mat = fc.Reg.Read<MaterialComponent>(e);
+			const auto& mesh = fc.Reg.Read<MeshRuntimeComponent>(e);
+			const auto& mat = fc.Reg.Read<MaterialRuntimeComponent>(e);
 
 			// Cache can include an entity whose mesh/material resolve runs the same frame; guard against the
 			// null instance (was an access violation).
-			if (!mesh.MeshInstance || !mat.MaterialInstance)
+			if (!mesh.Instance || !mat.Instance)
 			{
 				continue;
 			}
@@ -668,7 +670,7 @@ namespace Snowstorm
 			                  auto& assets = SingletonView<AssetManagerSingleton>();
 
 			                  DrawVisibleMeshes(fc, cam,
-			                                    [&](entt::entity e, const WorldTransformComponent& tr, const MeshComponent& mesh, const MaterialComponent& mat)
+			                                    [&](entt::entity e, const WorldTransformComponent& tr, const MeshRuntimeComponent& mesh, const MaterialRuntimeComponent& mat)
 			                                    {
 				                                    // Per-instance albedo override rides the instance buffer (objects sharing
 				                                    // a material still batch). 0 = use the material's own albedo.
@@ -687,8 +689,8 @@ namespace Snowstorm
 					                                    }
 				                                    }
 
-				                                    const glm::vec4 customData = mat.MaterialInstance->GetPerInstanceCustomData();
-				                                    fc.Renderer.DrawMesh(tr.LocalToWorld, mesh.MeshInstance, mat.MaterialInstance, albedoIndex, customData);
+				                                    const glm::vec4 customData = mat.Instance->GetPerInstanceCustomData();
+				                                    fc.Renderer.DrawMesh(tr.LocalToWorld, mesh.Instance, mat.Instance, albedoIndex, customData);
 			                                    });
 
 			                  fc.Renderer.Flush();

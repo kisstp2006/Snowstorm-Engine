@@ -52,10 +52,10 @@
     {
       "Components": {
         "Snowstorm::MaterialComponent": {
-          "$asset": "18252608572562089750"
+          "Material": "18252608572562089750"
         },
         "Snowstorm::MeshComponent": {
-          "$asset": "10775407233779663383"
+          "Mesh": "10775407233779663383"
         },
         "Snowstorm::TransformComponent": {
           "Position": [
@@ -85,10 +85,10 @@
     {
       "Components": {
         "Snowstorm::MaterialComponent": {
-          "$asset": "8302424511842164635"
+          "Material": "8302424511842164635"
         },
         "Snowstorm::MeshComponent": {
-          "$asset": "5832065272398930637"
+          "Mesh": "5832065272398930637"
         },
         "Snowstorm::TransformComponent": {
           "Position": [
@@ -118,10 +118,10 @@
     {
       "Components": {
         "Snowstorm::MaterialComponent": {
-          "$asset": "13026309866690785247"
+          "Material": "13026309866690785247"
         },
         "Snowstorm::MeshComponent": {
-          "$asset": "13078227215737902699"
+          "Mesh": "13078227215737902699"
         },
         "Snowstorm::TransformComponent": {
           "Position": [
@@ -151,10 +151,10 @@
     {
       "Components": {
         "Snowstorm::MaterialComponent": {
-          "$asset": "4040271266701906521"
+          "Material": "4040271266701906521"
         },
         "Snowstorm::MeshComponent": {
-          "$asset": "7205460950427829625"
+          "Mesh": "7205460950427829625"
         },
         "Snowstorm::TransformComponent": {
           "Position": [
@@ -184,10 +184,10 @@
     {
       "Components": {
         "Snowstorm::MaterialComponent": {
-          "$asset": "8571748957980010614"
+          "Material": "8571748957980010614"
         },
         "Snowstorm::MeshComponent": {
-          "$asset": "7927813937123330620"
+          "Mesh": "7927813937123330620"
         },
         "Snowstorm::TransformComponent": {
           "Position": [
@@ -217,10 +217,10 @@
     {
       "Components": {
         "Snowstorm::MaterialComponent": {
-          "$asset": "2741182996557846012"
+          "Material": "2741182996557846012"
         },
         "Snowstorm::MeshComponent": {
-          "$asset": "4091405869459828822"
+          "Mesh": "4091405869459828822"
         },
         "Snowstorm::TransformComponent": {
           "Position": [
@@ -250,10 +250,10 @@
     {
       "Components": {
         "Snowstorm::MaterialComponent": {
-          "$asset": "8567236743302198087"
+          "Material": "8567236743302198087"
         },
         "Snowstorm::MeshComponent": {
-          "$asset": "12800378017674087184"
+          "Mesh": "12800378017674087184"
         },
         "Snowstorm::TransformComponent": {
           "Position": [
@@ -283,10 +283,10 @@
     {
       "Components": {
         "Snowstorm::MaterialComponent": {
-          "$asset": "16544055701099671800"
+          "Material": "16544055701099671800"
         },
         "Snowstorm::MeshComponent": {
-          "$asset": "10929385969736388707"
+          "Mesh": "10929385969736388707"
         },
         "Snowstorm::TransformComponent": {
           "Position": [
@@ -316,10 +316,10 @@
     {
       "Components": {
         "Snowstorm::MaterialComponent": {
-          "$asset": "8935939496501527747"
+          "Material": "8935939496501527747"
         },
         "Snowstorm::MeshComponent": {
-          "$asset": "2033495428678049269"
+          "Mesh": "2033495428678049269"
         },
         "Snowstorm::TransformComponent": {
           "Position": [
@@ -349,10 +349,10 @@
     {
       "Components": {
         "Snowstorm::MaterialComponent": {
-          "$asset": "3121192196175594304"
+          "Material": "3121192196175594304"
         },
         "Snowstorm::MeshComponent": {
-          "$asset": "9602043544168953391"
+          "Mesh": "9602043544168953391"
         },
         "Snowstorm::TransformComponent": {
           "Position": [
@@ -382,10 +382,10 @@
     {
       "Components": {
         "Snowstorm::MaterialComponent": {
-          "$asset": "13066028838277334682"
+          "Material": "13066028838277334682"
         },
         "Snowstorm::MeshComponent": {
-          "$asset": "4114919225626260598"
+          "Mesh": "4114919225626260598"
         },
         "Snowstorm::TransformComponent": {
           "Position": [
@@ -415,10 +415,10 @@
     {
       "Components": {
         "Snowstorm::MaterialComponent": {
-          "$asset": "11194328589051197402"
+          "Material": "11194328589051197402"
         },
         "Snowstorm::MeshComponent": {
-          "$asset": "2783271755489105084"
+          "Mesh": "2783271755489105084"
         },
         "Snowstorm::TransformComponent": {
           "Position": [
@@ -448,10 +448,10 @@
     {
       "Components": {
         "Snowstorm::MaterialComponent": {
-          "$asset": "1617698807349275783"
+          "Material": "1617698807349275783"
         },
         "Snowstorm::MeshComponent": {
-          "$asset": "5754354131351941755"
+          "Mesh": "5754354131351941755"
         },
         "Snowstorm::TransformComponent": {
           "Position": [
@@ -481,10 +481,10 @@
     {
       "Components": {
         "Snowstorm::MaterialComponent": {
-          "$asset": "2770843556057342847"
+          "Material": "2770843556057342847"
         },
         "Snowstorm::MeshComponent": {
-          "$asset": "13353155638894207671"
+          "Mesh": "13353155638894207671"
         },
         "Snowstorm::TransformComponent": {
           "Position": [
@@ -514,10 +514,10 @@
     {
       "Components": {
         "Snowstorm::MaterialComponent": {
-          "$asset": "14086680195371146992"
+          "Material": "14086680195371146992"
         },
         "Snowstorm::MeshComponent": {
-          "$asset": "13730696295135408885"
+          "Mesh": "13730696295135408885"
         },
         "Snowstorm::TransformComponent": {
           "Position": [
@@ -547,10 +547,10 @@
     {
       "Components": {
         "Snowstorm::MaterialComponent": {
-          "$asset": "1221424205949685414"
+          "Material": "1221424205949685414"
         },
         "Snowstorm::MeshComponent": {
-          "$asset": "6163564378041380467"
+          "Mesh": "6163564378041380467"
         },
         "Snowstorm::TransformComponent": {
           "Position": [
@@ -580,10 +580,10 @@
     {
       "Components": {
         "Snowstorm::MaterialComponent": {
-          "$asset": "12123771172042414589"
+          "Material": "12123771172042414589"
         },
         "Snowstorm::MeshComponent": {
-          "$asset": "15120242575972384252"
+          "Mesh": "15120242575972384252"
         },
         "Snowstorm::TransformComponent": {
           "Position": [
@@ -613,10 +613,10 @@
     {
       "Components": {
         "Snowstorm::MaterialComponent": {
-          "$asset": "4387445924341059702"
+          "Material": "4387445924341059702"
         },
         "Snowstorm::MeshComponent": {
-          "$asset": "12863179544685464940"
+          "Mesh": "12863179544685464940"
         },
         "Snowstorm::TransformComponent": {
           "Position": [
@@ -646,10 +646,10 @@
     {
       "Components": {
         "Snowstorm::MaterialComponent": {
-          "$asset": "10497186200766616415"
+          "Material": "10497186200766616415"
         },
         "Snowstorm::MeshComponent": {
-          "$asset": "7917909824905164640"
+          "Mesh": "7917909824905164640"
         },
         "Snowstorm::TransformComponent": {
           "Position": [
@@ -679,10 +679,10 @@
     {
       "Components": {
         "Snowstorm::MaterialComponent": {
-          "$asset": "7694659826518672649"
+          "Material": "7694659826518672649"
         },
         "Snowstorm::MeshComponent": {
-          "$asset": "2059908101132412812"
+          "Mesh": "2059908101132412812"
         },
         "Snowstorm::TransformComponent": {
           "Position": [
@@ -712,10 +712,10 @@
     {
       "Components": {
         "Snowstorm::MaterialComponent": {
-          "$asset": "13873447470881818058"
+          "Material": "13873447470881818058"
         },
         "Snowstorm::MeshComponent": {
-          "$asset": "14816694191572111982"
+          "Mesh": "14816694191572111982"
         },
         "Snowstorm::TransformComponent": {
           "Position": [
@@ -745,10 +745,10 @@
     {
       "Components": {
         "Snowstorm::MaterialComponent": {
-          "$asset": "6127921637032783438"
+          "Material": "6127921637032783438"
         },
         "Snowstorm::MeshComponent": {
-          "$asset": "2529431642167338151"
+          "Mesh": "2529431642167338151"
         },
         "Snowstorm::TransformComponent": {
           "Position": [
@@ -778,10 +778,10 @@
     {
       "Components": {
         "Snowstorm::MaterialComponent": {
-          "$asset": "2357172329091658311"
+          "Material": "2357172329091658311"
         },
         "Snowstorm::MeshComponent": {
-          "$asset": "18043870780987762981"
+          "Mesh": "18043870780987762981"
         },
         "Snowstorm::TransformComponent": {
           "Position": [
@@ -811,10 +811,10 @@
     {
       "Components": {
         "Snowstorm::MaterialComponent": {
-          "$asset": "15991929536669576162"
+          "Material": "15991929536669576162"
         },
         "Snowstorm::MeshComponent": {
-          "$asset": "5974523661310525941"
+          "Mesh": "5974523661310525941"
         },
         "Snowstorm::TransformComponent": {
           "Position": [
@@ -844,10 +844,10 @@
     {
       "Components": {
         "Snowstorm::MaterialComponent": {
-          "$asset": "17150243090848776623"
+          "Material": "17150243090848776623"
         },
         "Snowstorm::MeshComponent": {
-          "$asset": "12989859959238708985"
+          "Mesh": "12989859959238708985"
         },
         "Snowstorm::TransformComponent": {
           "Position": [

@@ -3,6 +3,8 @@
 #include "Snowstorm/Components/CameraComponent.hpp"
 #include "Snowstorm/Components/MaterialComponent.hpp"
 #include "Snowstorm/Components/MeshComponent.hpp"
+#include "Snowstorm/Components/MeshRuntimeComponent.hpp"
+#include "Snowstorm/Components/MaterialRuntimeComponent.hpp"
 #include "Snowstorm/Components/PrevTransformComponent.hpp"
 #include "Snowstorm/Components/RenderTargetComponent.hpp"
 #include "Snowstorm/Components/WorldTransformComponent.hpp"
@@ -204,9 +206,9 @@ namespace Snowstorm
 					                  fc.Renderer.BeginScene(*cam.Rt, cam.Position, fc.Ctx, fc.FrameIndex);
 
 					                  m_Owner.DrawVisibleMeshes(fc, cam,
-					                                            [&](entt::entity, const WorldTransformComponent& tr, const MeshComponent& mesh, const MaterialComponent& mat)
+					                                            [&](entt::entity, const WorldTransformComponent& tr, const MeshRuntimeComponent& mesh, const MaterialRuntimeComponent& mat)
 					                                            {
-						                                            fc.Renderer.DrawMesh(tr.LocalToWorld, mesh.MeshInstance, mat.MaterialInstance, 0,
+						                                            fc.Renderer.DrawMesh(tr.LocalToWorld, mesh.Instance, mat.Instance, 0,
 						                                                                 glm::vec4(0.0f), tr.LocalToWorld);
 					                                            });
 
@@ -1426,7 +1428,7 @@ namespace Snowstorm
 					                  fc.Renderer.BeginScene(*cam.Rt, cam.Position, fc.Ctx, fc.FrameIndex);
 
 					                  m_Owner.DrawVisibleMeshes(fc, cam,
-					                                            [&](entt::entity e, const WorldTransformComponent& tr, const MeshComponent& mesh, const MaterialComponent& mat)
+					                                            [&](entt::entity e, const WorldTransformComponent& tr, const MeshRuntimeComponent& mesh, const MaterialRuntimeComponent& mat)
 					                                            {
 						                                            // Last frame's world matrix; PrevTransformSnapshotSystem writes it
 						                                            // end-of-frame. Missing (object created this frame) -> use current
@@ -1436,7 +1438,7 @@ namespace Snowstorm
 						                                            {
 							                                            prevModel = pt->PrevModel;
 						                                            }
-						                                            fc.Renderer.DrawMesh(tr.LocalToWorld, mesh.MeshInstance, mat.MaterialInstance, 0,
+						                                            fc.Renderer.DrawMesh(tr.LocalToWorld, mesh.Instance, mat.Instance, 0,
 						                                                                 glm::vec4(0.0f), prevModel);
 					                                            });
 
@@ -1553,18 +1555,18 @@ namespace Snowstorm
 					                  {
 						                  fc.Renderer.BeginScene(*cam.Rt, cam.Position, fc.Ctx, fc.FrameIndex, /*jittered*/ true);
 						                  m_Owner.DrawVisibleMeshes(fc, cam,
-						                                            [&](entt::entity, const WorldTransformComponent& tr, const MeshComponent& mesh, const MaterialComponent& mat)
+						                                            [&](entt::entity, const WorldTransformComponent& tr, const MeshRuntimeComponent& mesh, const MaterialRuntimeComponent& mat)
 						                                            {
 							                                            // OPAQUE-ONLY z-prepass: skip alpha-cutout (MASK). Its forward coverage
 							                                            // can disagree with this separate depth pass at cutout edges, so writing
 							                                            // its depth here early-Z-culls what's behind the holes -> grey. Cutout
 							                                            // geometry keeps its normal forward path (no early-Z, but correct); the
 							                                            // opaque bulk still gets the win. BLEND falls through as opaque (#82).
-							                                            if (mat.MaterialInstance && mat.MaterialInstance->GetConstants().AlphaMaskEnabled != 0)
+							                                            if (mat.Instance && mat.Instance->GetConstants().AlphaMaskEnabled != 0)
 							                                            {
 								                                            return;
 							                                            }
-							                                            fc.Renderer.DrawMesh(tr.LocalToWorld, mesh.MeshInstance, mat.MaterialInstance, 0,
+							                                            fc.Renderer.DrawMesh(tr.LocalToWorld, mesh.Instance, mat.Instance, 0,
 							                                                                 glm::vec4(0.0f), tr.LocalToWorld);
 						                                            });
 						                  m_DepthPrepass.RecordDepth(fc.Renderer, fc.FrameIndex, depthFmt, cam.Rt->JitteredViewProjection);

@@ -115,6 +115,17 @@ namespace Snowstorm
 			return v.to_string();
 		}
 
+		if (t.is_sequential_container())
+		{
+			// std::vector<T> etc. -> JSON array of the elements (each through the same dispatch).
+			json arr = json::array();
+			for (const auto& item : v.create_sequential_view())
+			{
+				arr.push_back(RttrToJson(item.extract_wrapped_value()));
+			}
+			return arr;
+		}
+
 		if (t.is_wrapper())
 		{
 			// WARNING: For smart pointers / Ref<T>, this will serialize the pointed-to object only if RTTR can see it.
@@ -153,6 +164,30 @@ namespace Snowstorm
 
 			const rttr::type pt = prop.get_type();
 			rttr::variant v;
+			if (pt.is_sequential_container())
+			{
+				// Rebuild the container in place: start from the property's current value (so the variant
+				// carries the concrete std::vector<T> type), resize, then fill element by element.
+				const json& arr = j.at(key);
+				if (!arr.is_array())
+				{
+					continue;
+				}
+				v = prop.get_value(inst);
+				auto view = v.create_sequential_view();
+				view.set_size(arr.size());
+				const rttr::type elemType = view.get_value_type();
+				for (size_t i = 0; i < arr.size(); ++i)
+				{
+					rttr::variant elem;
+					if (JsonToRttrVariant(arr[i], elemType, elem))
+					{
+						view.set_value(i, elem);
+					}
+				}
+				prop.set_value(inst, v);
+				continue;
+			}
 			if (!JsonToRttrVariant(j.at(key), pt, v))
 			{
 				continue;
