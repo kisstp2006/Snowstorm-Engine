@@ -22,7 +22,9 @@
 #include "Platform/Vulkan/VulkanTexture.hpp"
 
 #include "Snowstorm/Components/TransformComponent.hpp"
+#include "Snowstorm/Components/MaterialRuntimeComponent.hpp"
 #include "Snowstorm/Components/MeshComponent.hpp"
+#include "Snowstorm/Components/MeshRuntimeComponent.hpp"
 #include "Snowstorm/Components/MaterialComponent.hpp"
 #include "Snowstorm/Components/VisibilityComponents.hpp"
 
@@ -119,6 +121,7 @@ namespace Snowstorm
 		if (changed)
 		{
 			m_Registry.SaveToFile(project->GetAssetRegistryPath());
+			++m_RegistryGeneration;
 		}
 		return found;
 	}
@@ -782,22 +785,29 @@ namespace Snowstorm
 		Ref<TextureView> placeholder = EnsurePlaceholderView(meta->Path.filename().string());
 		cache[handle] = placeholder;
 
+		const uint32_t slot = placeholder->GetGlobalBindlessIndex();
+		m_PlaceholderSlots.insert(slot); // slot now shows the placeholder; cleared when the real image is uploaded
+		KickTextureDecode(*meta, srgb, slot);
+		return placeholder;
+	}
+
+	bool AssetManagerSingleton::KickTextureDecode(const AssetMetadata& meta, const bool srgb, const uint32_t slot)
+	{
 		// Combine handle + color space into the in-flight/cache key (a texture can load as both).
+		const AssetHandle handle = meta.Handle;
 		const uint64_t key = handle.Value() ^ (srgb ? 0x1ULL : 0x0ULL) << 63;
 		if (m_InFlightTextures.contains(key))
 		{
-			return placeholder;
+			return false;
 		}
 		m_InFlightTextures.insert(key);
 		++m_PendingTotal;
 
 		auto& jobs = Application::Get().GetServiceManager().GetService<JobSystem>();
-		const std::string path = ResolveAssetPath(meta->Path).string();
-		const std::string debugName = meta->Path.filename().string();
+		const std::string path = ResolveAssetPath(meta.Path).string();
+		const std::string debugName = meta.Path.filename().string();
 		const uint64_t sourceTime = m_Registry.SourceKey(handle);
 		const bool generateMips = m_Registry.GetImportSettings(handle).Texture.GenerateMips;
-		const uint32_t slot = placeholder->GetGlobalBindlessIndex();
-		m_PlaceholderSlots.insert(slot); // slot now shows the placeholder; cleared when the real image is uploaded
 
 		(void)jobs.Submit([this, key, handle, srgb, slot, path, sourceTime, generateMips, debugName]()
 		                  {
@@ -817,8 +827,100 @@ namespace Snowstorm
 
 			std::lock_guard lock(m_CompletedMutex);
 			m_CompletedTextures.push_back(std::move(done)); });
+		return true;
+	}
 
-		return placeholder;
+	void AssetManagerSingleton::OnSourceChanged(const std::filesystem::path& relPath, const AssetType type, const bool removed)
+	{
+		if (removed)
+		{
+			// Drop the rows; live objects keep rendering the last good data until the scene is reloaded.
+			SS_CORE_INFO("Hot reload: '{}' removed; unregistering.", relPath.string());
+			ScanAssets();
+			return;
+		}
+
+		// New or changed source: (re)import, then decide whether anything live depends on it.
+		const std::vector<AssetHandle> before = m_Registry.HandlesForSource(relPath);
+		const bool known = !before.empty();
+		const bool contentChanged = known ? m_Registry.Refresh(relPath) : false;
+		if (!known)
+		{
+			SS_CORE_INFO("Hot reload: new source '{}' imported.", relPath.string());
+			ScanAssets();
+			return;
+		}
+		if (!contentChanged)
+		{
+			return; // touched but identical bytes (save without edits)
+		}
+		m_Registry.SaveToFile(Project::GetActive()->GetAssetRegistryPath());
+		++m_RegistryGeneration;
+		SS_CORE_INFO("Hot reload: '{}' changed ({} handle(s)).", relPath.string(), before.size());
+
+		for (const AssetHandle handle : before)
+		{
+			switch (type)
+			{
+			case AssetType::Texture:
+			{
+				// In-place: re-decode on a worker and rewrite the SAME bindless slot the live views hold, so
+				// every material that baked the slot index sees the new pixels with no re-resolve at all.
+				const AssetMetadata* meta = m_Registry.GetMetadata(handle);
+				if (!meta)
+				{
+					break;
+				}
+				for (const bool srgb : {true, false})
+				{
+					auto& cache = srgb ? m_TextureViewCache : m_TextureViewCacheLinear;
+					if (const auto it = cache.find(handle.Value()); it != cache.end() && it->second)
+					{
+						KickTextureDecode(*meta, srgb, it->second->GetGlobalBindlessIndex());
+					}
+				}
+				break;
+			}
+			case AssetType::Mesh:
+				// Evict the GPU mesh; MeshResolveSystem re-resolves every entity whose runtime component
+				// points at it (async cook, so the old mesh keeps drawing until the new one is resident).
+				m_MeshCache.erase(handle.Value());
+				InvalidateMeshUsers(handle);
+				break;
+			case AssetType::Material:
+				ReloadMaterial(handle);
+				InvalidateMaterialUsers(handle);
+				break;
+			default:
+				break;
+			}
+		}
+	}
+
+	void AssetManagerSingleton::InvalidateMeshUsers(const AssetHandle handle)
+	{
+		auto& reg = m_World->GetRegistry();
+		for (const auto view = reg.view<MeshRuntimeComponent>(); const entt::entity e : view)
+		{
+			if (reg.Read<MeshRuntimeComponent>(e).ResolvedFrom == handle.Value())
+			{
+				reg.patch<MeshRuntimeComponent>(e, [](MeshRuntimeComponent& rt)
+				                                { rt.ResolvedFrom = 0; }); // keeps Instance until the reload lands
+			}
+		}
+	}
+
+	void AssetManagerSingleton::InvalidateMaterialUsers(const AssetHandle handle)
+	{
+		auto& reg = m_World->GetRegistry();
+		for (const auto view = reg.view<MaterialRuntimeComponent>(); const entt::entity e : view)
+		{
+			if (reg.Read<MaterialRuntimeComponent>(e).ResolvedFrom == handle.Value())
+			{
+				reg.patch<MaterialRuntimeComponent>(e, [](MaterialRuntimeComponent& rt)
+				                                    { rt.ResolvedFrom = 0; });
+			}
+		}
 	}
 
 	Ref<Pipeline> AssetManagerSingleton::GetOrCreatePipeline(const std::string& fragmentShaderPath)

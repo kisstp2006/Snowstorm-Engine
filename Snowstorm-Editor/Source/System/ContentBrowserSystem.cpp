@@ -65,11 +65,14 @@ namespace Snowstorm
 			return a.DisplayName < b.DisplayName; });
 
 		m_Scanned = true;
+		m_SeenGeneration = assets.RegistryGeneration();
 	}
 
 	void ContentBrowserSystem::Execute(Timestep)
 	{
-		if (!m_Scanned || std::exchange(s_RescanRequested, false))
+		// Re-list when the registry changed underneath us (hot reload imported/removed a source).
+		if (!m_Scanned || std::exchange(s_RescanRequested, false) ||
+		    m_World->GetSingleton<AssetManagerSingleton>().RegistryGeneration() != m_SeenGeneration)
 		{
 			Rescan();
 		}

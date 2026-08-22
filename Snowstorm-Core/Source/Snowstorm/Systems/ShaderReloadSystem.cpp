@@ -45,18 +45,8 @@ namespace Snowstorm
 		// multi-second synchronous stall we deliberately don't do mid-session (Unreal's r.Shaders.Optimize
 		// model — the old live checkbox froze the editor). Change it in SnowstormStartup.cfg / CLI and relaunch.
 
-		static float timeSinceLastCheck = 0.0f;
-		timeSinceLastCheck += ts.GetSeconds();
-
-		//-- check for source edits every 1 second (hot reload)
-		if (timeSinceLastCheck > 1.0f)
-		{
-			// Recompile any shader whose source (or an included header) changed -> bumps its version and writes
-			// fresh SPIR-V to the cache. (ReloadAll self-skips unchanged shaders.)
-			shaderLibrary.ReloadAll();
-			needPipelineRebuild = true; // a changed shader bumps its version; the sweep below self-skips otherwise
-			timeSinceLastCheck = 0.0f;
-		}
+		// Source-edit hot reload is event-driven now: AssetWatchSystem calls ShaderLibrary::ReloadAll + the
+		// pipeline sweep when a .hlsl/.hlsli under Engine/Shaders or the project changes.
 
 		if (needPipelineRebuild)
 		{

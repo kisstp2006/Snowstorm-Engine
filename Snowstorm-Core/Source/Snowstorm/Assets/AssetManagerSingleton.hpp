@@ -51,6 +51,15 @@ namespace Snowstorm
 		[[nodiscard]] const AssetRegistry& Registry() const { return m_Registry; }
 		AssetRegistry& Registry() { return m_Registry; }
 
+		// Bumped whenever the registry's row set changed (scan, hot-reload import/removal): UI that lists
+		// assets (content browser, pickers) re-reads when it sees a new value.
+		[[nodiscard]] uint64_t RegistryGeneration() const { return m_RegistryGeneration; }
+
+		// Hot reload entry (AssetWatchSystem): a project source was written/created/removed. Re-imports,
+		// then swaps the live object per type — textures in place (same bindless slot), meshes/materials
+		// by invalidating their runtime components so the resolve systems re-pull.
+		void OnSourceChanged(const std::filesystem::path& relPath, AssetType type, bool removed);
+
 		// Import a model file (any Assimp format) as a set of renderable entities — one per submesh,
 		// each with Transform + Mesh + Material + Visibility. A per-submesh ".ssmat" is generated next
 		// to the model (DefaultLit; diffuse color + diffuse texture from the aiMaterial when present).
@@ -198,6 +207,12 @@ namespace Snowstorm
 		std::unordered_map<uint64_t, Ref<Texture>> m_ResidentTextures;
 
 		Ref<TextureView> EnsurePlaceholderView(const std::string& debugName);
+		// Async decode of `meta`'s source into bindless `slot` (placeholder or a live view's). False if a
+		// decode for that (handle, srgb) is already in flight.
+		bool KickTextureDecode(const AssetMetadata& meta, bool srgb, uint32_t slot);
+		void InvalidateMeshUsers(AssetHandle handle);
+		void InvalidateMaterialUsers(AssetHandle handle);
+		uint64_t m_RegistryGeneration = 1;
 
 		// Bindless slots still showing the magenta placeholder (real pixels not uploaded yet). A slot is added
 		// when its placeholder view is created and removed when ProcessCompletedLoads repoints it to the real

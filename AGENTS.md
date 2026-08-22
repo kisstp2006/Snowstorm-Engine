@@ -257,8 +257,13 @@ Worked example — **asset pipeline** (the engine's current biggest simplificati
   machine-local cache of that (gitignored, rebuilt from the sidecars). Mesh/texture/IBL **cook caches**
   (`Engine/cache/`) key on `SourceKey` = content hash ^ import-settings hash, so editing a source OR
   an import setting re-cooks. Mesh/texture loads are **async** (JobSystem cook, main-thread upload,
-  placeholder until resident). Still deliberately missing: a file watcher + hot reload (next), streaming
-  under a memory budget, compressed texture formats. Treat `AssetRegistry` / `AssetManagerSingleton`
+  placeholder until resident). A **file watcher** (`FileWatcherService`, ReadDirectoryChangesW on a
+  thread) feeds `AssetWatchSystem` (AssetSync phase; 250 ms debounce): a changed project source is
+  re-imported and **hot-reloaded** (`AssetManagerSingleton::OnSourceChanged` — textures in place into
+  the same bindless slot, meshes/materials by invalidating their runtime components so the resolve
+  systems re-pull), a new/removed file re-scans, and a `.hlsl/.hlsli` edit recompiles + rebuilds
+  pipelines (the old 1 Hz shader poll is gone). Still deliberately missing: streaming under a memory
+  budget, compressed texture formats. Treat `AssetRegistry` / `AssetManagerSingleton`
   as the seam where that grows.
 
 ## Verify before claiming

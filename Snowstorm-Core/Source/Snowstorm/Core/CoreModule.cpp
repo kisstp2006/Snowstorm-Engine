@@ -1,5 +1,6 @@
 #include "CoreModule.hpp"
 
+#include "Snowstorm/Core/FileWatcher.hpp"
 #include "Snowstorm/Core/JobSystem.hpp"
 #include "Snowstorm/ECS/SystemManager.hpp"
 #include "Snowstorm/ECS/SystemPhase.hpp"
@@ -10,6 +11,7 @@
 #include "Snowstorm/Render/Shader.hpp"
 #include "Snowstorm/Service/ServiceManager.hpp"
 #include "Snowstorm/Systems/AssetLoadSystem.hpp"
+#include "Snowstorm/Systems/AssetWatchSystem.hpp"
 #include "Snowstorm/Systems/CameraControllerSystem.hpp"
 #include "Snowstorm/Systems/CameraJitterSystem.hpp"
 #include "Snowstorm/Systems/CameraPathSystem.hpp"
@@ -35,6 +37,7 @@ namespace Snowstorm
 		// Job system first: it's the off-main-thread work pool the others may submit to (async asset
 		// loading), and it's device-independent so it can exist before the Vulkan-bound services.
 		services.RegisterService<JobSystem>();
+		services.RegisterService<FileWatcherService>(); // OS directory notifications for hot reload
 
 		// Device-bound, application-scoped subsystems. Registered after Renderer::Init so the Vulkan device
 		// exists. Order among these is not significant (none tick, none depend on another at construction).
@@ -55,6 +58,7 @@ namespace Snowstorm
 		sm.RegisterSystem<CameraPathSystem>(SystemPhase::Logic);
 		sm.RegisterSystem<RotatorSystem>(SystemPhase::Logic);
 
+		sm.RegisterSystem<AssetWatchSystem>(SystemPhase::AssetSync); // file changes -> re-import / hot reload
 		sm.RegisterSystem<ShaderReloadSystem>(SystemPhase::AssetSync);
 		sm.RegisterSystem<AssetLoadSystem>(SystemPhase::AssetSync);
 
