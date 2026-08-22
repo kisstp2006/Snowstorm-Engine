@@ -27,6 +27,15 @@ namespace Snowstorm
 		    .property("Friction", &ColliderMaterial::Friction)(metadata("Min", 0.0f))
 		    .property("Restitution", &ColliderMaterial::Restitution)(metadata("Min", 0.0f), metadata("Max", 1.0f));
 
+		registration::class_<CharacterControllerComponent>("Snowstorm::CharacterControllerComponent")
+		    .constructor()
+		    .property("SlopeLimitDeg", &CharacterControllerComponent::SlopeLimitDeg)(metadata("Min", 0.0f), metadata("Max", 89.0f), metadata("Speed", 0.5f))
+		    .property("StepOffset", &CharacterControllerComponent::StepOffset)(metadata("Min", 0.0f), metadata("Speed", 0.01f))
+		    .property("LayerID", &CharacterControllerComponent::LayerID)(metadata("Min", 0), metadata("Max", 31))
+		    .property("DisableGravity", &CharacterControllerComponent::DisableGravity)
+		    .property("ControlMovementInAir", &CharacterControllerComponent::ControlMovementInAir)
+		    .property("ControlRotationInAir", &CharacterControllerComponent::ControlRotationInAir);
+
 		registration::class_<RigidBodyComponent>("Snowstorm::RigidBodyComponent")
 		    .constructor()
 		    .property("BodyType", &RigidBodyComponent::BodyType)
@@ -80,6 +89,7 @@ namespace Snowstorm
 		    .property("CollisionComplexity", &MeshColliderComponent::CollisionComplexity);
 	}
 
+	AUTO_REGISTER_COMPONENT(CharacterControllerComponent);
 	AUTO_REGISTER_COMPONENT(RigidBodyComponent);
 	AUTO_REGISTER_COMPONENT(CompoundColliderComponent);
 	AUTO_REGISTER_COMPONENT(BoxColliderComponent);

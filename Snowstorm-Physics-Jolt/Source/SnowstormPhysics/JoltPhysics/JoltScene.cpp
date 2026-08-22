@@ -15,11 +15,18 @@
 #include <Jolt/Physics/Body/BodyInterface.h>
 #include <Jolt/Physics/Body/BodyLockInterface.h>
 #include <Jolt/Physics/Collision/CastResult.h>
+#include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
 #include <Jolt/Physics/Collision/RayCast.h>
+#include <Jolt/Physics/Collision/ShapeCast.h>
+#include <Jolt/Physics/Collision/Shape/BoxShape.h>
+#include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
+#include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/PhysicsSettings.h>
 #ifdef JPH_DEBUG_RENDERER
 #include <Jolt/Renderer/DebugRendererSimple.h>
 #endif
+
+#include <ranges>
 
 namespace Snowstorm
 {
@@ -60,6 +67,12 @@ namespace Snowstorm
 		}
 		m_RigidBodies.clear();
 		m_BodyToEntity.clear();
+		// Same for the characters: a CharacterControllerRuntimeComponent outlives this singleton.
+		for (auto& character : m_Characters | std::views::values)
+		{
+			character->Release();
+		}
+		m_Characters.clear();
 		m_System->SetContactListener(nullptr);
 	}
 
@@ -81,11 +94,70 @@ namespace Snowstorm
 			SS_CORE_WARN("JoltScene: PhysicsSystem::Update error {} (raise the body/pair/contact limits).", static_cast<int>(err));
 		}
 
+		// Characters after the world step: CharacterVirtual sweeps against the broadphase, so it has to see
+		// where the bodies ended up this step, not where they were before it.
+		for (const auto& character : m_Characters | std::views::values)
+		{
+			character->Simulate(fixedDt);
+		}
+
 		FlushContactEvents();
 	}
 
 	glm::vec3 JoltScene::GetGravity() const { return JoltUtils::FromJoltVector(m_System->GetGravity()); }
 	void JoltScene::SetGravity(const glm::vec3& gravity) { m_System->SetGravity(JoltUtils::ToJoltVector(gravity)); }
+
+	// ---------------------------------------------------------------------------------------------------
+	// Characters
+	// ---------------------------------------------------------------------------------------------------
+
+	Ref<JoltCharacterController> JoltScene::CreateCharacterController(const Entity entity)
+	{
+		if (!entity || !entity.HasComponent<IDComponent>())
+		{
+			return nullptr;
+		}
+		const UUID id = entity.GetComponent<IDComponent>().Id;
+		DestroyCharacterController(entity);
+
+		Ref<JoltCharacterController> character = CreateRef<JoltCharacterController>(*this, entity);
+		if (!character->IsValid())
+		{
+			return nullptr; // no collider yet, or creation failed (logged)
+		}
+		m_Characters[id] = character;
+		return character;
+	}
+
+	void JoltScene::DestroyCharacterController(const Entity entity)
+	{
+		if (!entity || !entity.HasComponent<IDComponent>())
+		{
+			return;
+		}
+		DestroyCharacterControllerByEntityID(entity.GetComponent<IDComponent>().Id);
+	}
+
+	void JoltScene::DestroyCharacterControllerByEntityID(const UUID entityID)
+	{
+		const auto it = m_Characters.find(entityID);
+		if (it == m_Characters.end())
+		{
+			return;
+		}
+		it->second->Release(); // runtime components may still hold a Ref; make it inert now
+		m_Characters.erase(it);
+	}
+
+	Ref<JoltCharacterController> JoltScene::GetCharacterController(const Entity entity) const
+	{
+		if (!entity || !entity.HasComponent<IDComponent>())
+		{
+			return nullptr;
+		}
+		const auto it = m_Characters.find(entity.GetComponent<IDComponent>().Id);
+		return it == m_Characters.end() ? nullptr : it->second;
+	}
 
 	// ---------------------------------------------------------------------------------------------------
 	// Bodies
@@ -208,6 +280,108 @@ namespace Snowstorm
 			outHit.Normal = JoltUtils::FromJoltVector(lock.GetBody().GetWorldSpaceSurfaceNormal(result.mSubShapeID2, ray.GetPointOnRay(result.mFraction)));
 		}
 		return true;
+	}
+
+	namespace
+	{
+		// The query shape a Box/Sphere/CapsuleCastInfo asks for. One place builds them so a cast and an
+		// overlap of the "same" query can't silently differ in size.
+		JPH::RefConst<JPH::Shape> BuildQueryShape(const ShapeCastInfo& info)
+		{
+			switch (info.GetCastType())
+			{
+			case ShapeCastType::Box:
+			{
+				const glm::vec3 halfExtent = glm::max(static_cast<const BoxCastInfo&>(info).HalfExtent, glm::vec3(0.001f));
+				return new JPH::BoxShape(JoltUtils::ToJoltVector(halfExtent));
+			}
+			case ShapeCastType::Sphere:
+				return new JPH::SphereShape(glm::max(static_cast<const SphereCastInfo&>(info).Radius, 0.001f));
+			case ShapeCastType::Capsule:
+			{
+				const auto& capsule = static_cast<const CapsuleCastInfo&>(info);
+				return new JPH::CapsuleShape(glm::max(capsule.HalfHeight, 0.001f), glm::max(capsule.Radius, 0.001f));
+			}
+			}
+			return nullptr;
+		}
+	}
+
+	bool JoltScene::CastShape(const ShapeCastInfo& info, SceneQueryHit& outHit) const
+	{
+		outHit.Clear();
+		const JPH::RefConst<JPH::Shape> shape = BuildQueryShape(info);
+		if (!shape || info.MaxDistance <= 0.0f)
+		{
+			return false;
+		}
+
+		const glm::vec3 direction = glm::normalize(info.Direction);
+		const JPH::RShapeCast cast(shape, JPH::Vec3::sReplicate(1.0f),
+		                           JPH::RMat44::sTranslation(JoltUtils::ToJoltVector(info.Origin)),
+		                           JoltUtils::ToJoltVector(direction * info.MaxDistance));
+
+		JPH::IgnoreMultipleBodiesFilter ignore;
+		for (const UUID excluded : info.ExcludedEntities)
+		{
+			if (const Ref<JoltBody> body = GetBodyByEntityID(excluded))
+			{
+				ignore.IgnoreBody(body->GetBodyID());
+			}
+		}
+
+		JPH::ClosestHitCollisionCollector<JPH::CastShapeCollector> collector;
+		m_System->GetNarrowPhaseQuery().CastShape(cast, {}, JPH::RVec3::sZero(), collector, {}, {}, ignore);
+		if (!collector.HadHit())
+		{
+			return false;
+		}
+
+		const auto idIt = m_BodyToEntity.find(collector.mHit.mBodyID2.GetIndexAndSequenceNumber());
+		outHit.HitEntity = idIt == m_BodyToEntity.end() ? UUID{0} : idIt->second;
+		outHit.Distance = collector.mHit.mFraction * info.MaxDistance;
+		outHit.Position = JoltUtils::FromJoltVector(collector.mHit.mContactPointOn2);
+		// Jolt reports the penetration axis (points INTO body 2); the surface normal is the other way.
+		outHit.Normal = -glm::normalize(JoltUtils::FromJoltVector(collector.mHit.mPenetrationAxis));
+		return true;
+	}
+
+	uint32_t JoltScene::OverlapShape(const ShapeCastInfo& info, std::vector<SceneQueryHit>& outHits) const
+	{
+		outHits.clear();
+		const JPH::RefConst<JPH::Shape> shape = BuildQueryShape(info);
+		if (!shape)
+		{
+			return 0;
+		}
+
+		JPH::IgnoreMultipleBodiesFilter ignore;
+		for (const UUID excluded : info.ExcludedEntities)
+		{
+			if (const Ref<JoltBody> body = GetBodyByEntityID(excluded))
+			{
+				ignore.IgnoreBody(body->GetBodyID());
+			}
+		}
+
+		JPH::AllHitCollisionCollector<JPH::CollideShapeCollector> collector;
+		m_System->GetNarrowPhaseQuery().CollideShape(shape, JPH::Vec3::sReplicate(1.0f),
+		                                             JPH::RMat44::sTranslation(JoltUtils::ToJoltVector(info.Origin)),
+		                                             {}, JPH::RVec3::sZero(), collector, {}, {}, ignore);
+
+		outHits.reserve(collector.mHits.size());
+		for (const JPH::CollideShapeResult& hit : collector.mHits)
+		{
+			SceneQueryHit out;
+			out.Clear();
+			const auto idIt = m_BodyToEntity.find(hit.mBodyID2.GetIndexAndSequenceNumber());
+			out.HitEntity = idIt == m_BodyToEntity.end() ? UUID{0} : idIt->second;
+			out.Position = JoltUtils::FromJoltVector(hit.mContactPointOn2);
+			out.Normal = -glm::normalize(JoltUtils::FromJoltVector(hit.mPenetrationAxis));
+			out.Distance = hit.mPenetrationDepth; // an overlap has no travel: report how deep it is instead
+			outHits.push_back(out);
+		}
+		return static_cast<uint32_t>(outHits.size());
 	}
 
 	// ---------------------------------------------------------------------------------------------------

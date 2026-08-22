@@ -47,6 +47,19 @@ namespace Snowstorm
 		};
 		const AutoRegisterPhysicsBodyRuntime g_autoRegisterPhysicsBodyRuntime;
 
+		struct AutoRegisterCharacterControllerRuntime
+		{
+			AutoRegisterCharacterControllerRuntime()
+			{
+				ComponentRegisterOptions opts{};
+				opts.Serializable = false;
+				opts.DrawInEditor = false;
+				opts.Copyable = false;
+				RegisterComponent<CharacterControllerRuntimeComponent>(opts);
+			}
+		};
+		const AutoRegisterCharacterControllerRuntime g_autoRegisterCharacterControllerRuntime;
+
 		bool HasCollider(TrackedRegistry& reg, const entt::entity e)
 		{
 			return reg.any_of<BoxColliderComponent>(e) || reg.any_of<SphereColliderComponent>(e) ||
@@ -70,8 +83,15 @@ namespace Snowstorm
 		}
 
 		// A body entity: carries a RigidBody, or is a collider with no body above it (implicit static).
+		// A CHARACTER is never one: its colliders belong to the CharacterVirtual, and turning them into an
+		// implicit static body as well would leave a second, immovable copy of the character in the world
+		// for the real one to collide with.
 		bool IsBodyEntity(TrackedRegistry& reg, const entt::entity e)
 		{
+			if (reg.any_of<CharacterControllerComponent>(e))
+			{
+				return false;
+			}
 			return reg.any_of<WorldTransformComponent>(e) &&
 			       (reg.any_of<RigidBodyComponent>(e) || (HasCollider(reg, e) && !HasBodyAbove(reg, e)));
 		}
@@ -171,6 +191,65 @@ namespace Snowstorm
 			rt.Body = body;
 			rt.Activated = simulating && !body->IsStatic();
 			rt.HasPrev = false;
+		}
+
+		// 3. Characters: same three cases as bodies (drop, rebuild on authored change, create), plus
+		//    "follow the edited transform while not simulating" so Play starts from where the gizmo left it.
+		std::vector<UUID> deadCharacters;
+		for (const auto& [uuid, character] : scene.GetCharacterControllers())
+		{
+			const Entity e = character->GetEntity();
+			if (!e.IsValid() || !reg.any_of<CharacterControllerComponent>(e.Handle()))
+			{
+				if (e.IsValid() && reg.any_of<CharacterControllerRuntimeComponent>(e.Handle()))
+				{
+					reg.remove<CharacterControllerRuntimeComponent>(e.Handle());
+				}
+				deadCharacters.push_back(uuid);
+			}
+		}
+		for (const UUID uuid : deadCharacters)
+		{
+			scene.DestroyCharacterControllerByEntityID(uuid);
+		}
+
+		for (const auto view = reg.view<CharacterControllerComponent, WorldTransformComponent>(); const entt::entity e : view)
+		{
+			const Entity entity{e, m_World};
+			Ref<JoltCharacterController> character = scene.GetCharacterController(entity);
+			const uint64_t hash = JoltShapes::ComputeAuthoredHash(entity);
+
+			if (character && character->GetAuthoredHash() == hash)
+			{
+				const auto& cc = reg.Read<CharacterControllerComponent>(e);
+				// Live-editable knobs (no rebuild needed -- they are settings, not shape).
+				character->SetSlopeLimit(cc.SlopeLimitDeg);
+				character->SetStepOffset(cc.StepOffset);
+				character->SetGravityEnabled(!cc.DisableGravity);
+				character->SetControlMovementInAir(cc.ControlMovementInAir);
+				character->SetControlRotationInAir(cc.ControlRotationInAir);
+				character->SetCollisionLayer(cc.LayerID);
+				if (!simulating && reg.WasChanged<WorldTransformComponent>(e))
+				{
+					glm::vec3 pos, scale;
+					glm::quat rot;
+					DecomposeTRS(reg.Read<WorldTransformComponent>(e).LocalToWorld, pos, rot, scale);
+					character->SetTranslation(pos);
+					character->SetRotation(rot);
+				}
+				continue;
+			}
+
+			character = scene.CreateCharacterController(entity);
+			if (!character)
+			{
+				if (reg.any_of<CharacterControllerRuntimeComponent>(e))
+				{
+					reg.remove<CharacterControllerRuntimeComponent>(e);
+				}
+				continue; // no collider on the character yet (warned once by the controller)
+			}
+			reg.Ensure<CharacterControllerRuntimeComponent>(e).Controller = character;
 		}
 	}
 
@@ -275,6 +354,38 @@ namespace Snowstorm
 			if (glm::distance(cur.Translation, lp) < 1e-6f && std::abs(glm::dot(cur.GetRotation(), lr)) > 1.0f - 1e-7f)
 			{
 				continue; // at rest: don't dirty the transform (keeps culling/TLAS quiet)
+			}
+			reg.patch<TransformComponent>(e, [&](TransformComponent& tr)
+			                              {
+				tr.Translation = lp;
+				tr.SetRotation(lr); });
+		}
+
+		// Characters: the CharacterVirtual pose IS the truth while simulating (nothing else moves it), so
+		// it goes back to the transform every frame. No interpolation -- a character is swept once per
+		// fixed step from its own velocity, so the two fixed-step poses it would blend are what the script
+		// asked for, and blending them only adds input latency.
+		for (const auto view = reg.view<CharacterControllerRuntimeComponent, TransformComponent>(); const entt::entity e : view)
+		{
+			const auto& rt = reg.Read<CharacterControllerRuntimeComponent>(e);
+			if (!rt.Controller || !rt.Controller->IsValid())
+			{
+				continue;
+			}
+			const glm::mat4 world = glm::translate(glm::mat4(1.0f), rt.Controller->GetTranslation()) *
+			                        glm::mat4_cast(rt.Controller->GetRotation());
+			const Entity parent = m_World->GetParent(Entity{e, m_World});
+			const glm::mat4 local = parent ? glm::inverse(m_World->ComputeWorldMatrix(parent)) * world : world;
+			glm::vec3 lp, ls;
+			glm::quat lr;
+			if (!DecomposeTRS(local, lp, lr, ls))
+			{
+				continue;
+			}
+			const TransformComponent& cur = reg.Read<TransformComponent>(e);
+			if (glm::distance(cur.Translation, lp) < 1e-6f && std::abs(glm::dot(cur.GetRotation(), lr)) > 1.0f - 1e-7f)
+			{
+				continue; // standing still: don't dirty the transform (keeps culling/TLAS quiet)
 			}
 			reg.patch<TransformComponent>(e, [&](TransformComponent& tr)
 			                              {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "JoltPhysics/JoltBody.hpp"
+#include "JoltPhysics/JoltCharacterController.hpp"
 
 #include <Snowstorm/Core/Base.hpp>
 #include <Snowstorm/ECS/System.hpp>
@@ -19,6 +20,14 @@ namespace Snowstorm
 		glm::vec3 PrevPosition{0.0f};
 		glm::quat PrevRotation{1.0f, 0.0f, 0.0f, 0.0f};
 		bool HasPrev = false;
+	};
+
+	// Runtime twin of CharacterControllerComponent: the live character. This is also the SCRIPT-FACING
+	// handle -- a script does GetComponent<CharacterControllerRuntimeComponent>().Controller->Move(...),
+	// the same way it reaches a rigid body through PhysicsBodyRuntimeComponent. Never serialized/copied.
+	struct CharacterControllerRuntimeComponent
+	{
+		Ref<JoltCharacterController> Controller;
 	};
 
 	// Resolve phase, AFTER TransformSystem (order +10): authored RigidBody/collider components -> JoltScene

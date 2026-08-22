@@ -15,6 +15,7 @@
 #include "Snowstorm/Input/InputStateSingleton.hpp"
 #include "Snowstorm/Assets/AssetManagerSingleton.hpp"
 #include "Snowstorm/Core/EnginePaths.hpp"
+#include "Snowstorm/Physics/PhysicsLayer.hpp"
 #include "Snowstorm/Project/Project.hpp"
 #include "Snowstorm/Utility/FileDialog.hpp"
 #include "Singletons/EditorNotificationsSingleton.hpp"
@@ -168,6 +169,11 @@ namespace Snowstorm
 						const bool ok = cmds.SaveProject();
 						notify.Push(ok ? "Project saved" : "Save failed", ok ? EditorToastType::Success : EditorToastType::Error);
 					}
+				}
+
+				if (ImGui::MenuItem("Project Settings...", nullptr, false, Project::GetActive() != nullptr))
+				{
+					m_ShowProjectSettings = true;
 				}
 
 				// Back to the project manager the editor boots into (Godot's "Quit to Project List").
@@ -333,9 +339,134 @@ namespace Snowstorm
 
 		DrawImportModelPopup(notify);
 		DrawNewProjectPopup(notify);
+		DrawProjectSettingsWindow(notify);
 		DrawShortcutsWindow();
 
 		ImGui::End();
+	}
+
+	void EditorMenuSystem::DrawProjectSettingsWindow(EditorNotificationsSingleton& notify)
+	{
+		if (!m_ShowProjectSettings)
+		{
+			return;
+		}
+		ImGui::SetNextWindowSize(ImVec2(560.0f, 480.0f), ImGuiCond_FirstUseEver);
+		if (!ImGui::Begin("Project Settings", &m_ShowProjectSettings))
+		{
+			ImGui::End();
+			return;
+		}
+
+		// Every edit below mutates the process-wide PhysicsLayerManager immediately (physics picks it up on
+		// the next body/character it builds) and then writes the .ssproj, so a layer change can't be lost by
+		// forgetting File > Save Project. One small JSON file per click is cheap.
+		bool changed = false;
+
+		if (ImGui::CollapsingHeader("Physics Layers", ImGuiTreeNodeFlags_DefaultOpen))
+		{
+			ImGui::TextDisabled("A layer's index is its LayerID -- the value RigidBody/Character components store.");
+			ImGui::Spacing();
+
+			uint32_t layerToRemove = PhysicsLayerManager::GetLayerCount(); // sentinel: nothing to remove
+			for (uint32_t i = 0; i < PhysicsLayerManager::GetLayerCount(); ++i)
+			{
+				PhysicsLayer& layer = PhysicsLayerManager::GetLayer(i);
+				ImGui::PushID(static_cast<int>(i));
+				ImGui::Text("%u", i);
+				ImGui::SameLine(40.0f);
+
+				if (i == 0)
+				{
+					ImGui::TextUnformatted(layer.Name.c_str()); // "Default" is fixed: it is the fallback layer
+				}
+				else
+				{
+					char nameBuffer[64] = {};
+					strncpy_s(nameBuffer, layer.Name.c_str(), sizeof(nameBuffer) - 1);
+					ImGui::SetNextItemWidth(220.0f);
+					if (ImGui::InputText("##layer_name", nameBuffer, sizeof(nameBuffer),
+					                     ImGuiInputTextFlags_EnterReturnsTrue) &&
+					    nameBuffer[0] != '\0')
+					{
+						PhysicsLayerManager::UpdateLayerName(i, nameBuffer);
+						changed = true;
+					}
+					ImGui::SameLine();
+					if (ImGui::SmallButton("Remove"))
+					{
+						layerToRemove = i;
+					}
+				}
+				ImGui::PopID();
+			}
+
+			if (layerToRemove < PhysicsLayerManager::GetLayerCount())
+			{
+				PhysicsLayerManager::RemoveLayer(layerToRemove);
+				changed = true;
+			}
+
+			// 32 layers max: the collides-with mask is an int32 with one bit per layer.
+			ImGui::BeginDisabled(PhysicsLayerManager::GetLayerCount() >= 32);
+			ImGui::SetNextItemWidth(220.0f);
+			ImGui::InputTextWithHint("##new_layer", "New layer name", m_NewLayerNameBuffer, sizeof(m_NewLayerNameBuffer));
+			ImGui::SameLine();
+			if (ImGui::Button("Add Layer") && m_NewLayerNameBuffer[0] != '\0')
+			{
+				PhysicsLayerManager::AddLayer(m_NewLayerNameBuffer);
+				m_NewLayerNameBuffer[0] = '\0';
+				changed = true;
+			}
+			ImGui::EndDisabled();
+		}
+
+		if (ImGui::CollapsingHeader("Collision Matrix", ImGuiTreeNodeFlags_DefaultOpen))
+		{
+			ImGui::TextDisabled("Unchecked pairs never collide and never report contacts.");
+			ImGui::Spacing();
+
+			// One labelled row per layer listing the pairs it hasn't been shown yet (the lower triangle),
+			// rather than Unity's rotated-header grid: the pair is readable without decoding a diagonal, and
+			// it degrades gracefully as layers are added. The self-pair is included (a layer CAN be set not
+			// to collide with itself).
+			for (uint32_t i = 0; i < PhysicsLayerManager::GetLayerCount(); ++i)
+			{
+				ImGui::PushID(static_cast<int>(i));
+				ImGui::TextUnformatted(PhysicsLayerManager::GetLayer(i).Name.c_str());
+				ImGui::Indent();
+				for (uint32_t j = i; j < PhysicsLayerManager::GetLayerCount(); ++j)
+				{
+					ImGui::PushID(static_cast<int>(j));
+					bool collides = PhysicsLayerManager::ShouldCollide(i, j);
+					const std::string label = i == j ? "self" : PhysicsLayerManager::GetLayer(j).Name;
+					if (ImGui::Checkbox(label.c_str(), &collides))
+					{
+						PhysicsLayerManager::SetLayerCollision(i, j, collides);
+						changed = true;
+					}
+					ImGui::PopID();
+					if (j + 1 < PhysicsLayerManager::GetLayerCount())
+					{
+						ImGui::SameLine();
+					}
+				}
+				ImGui::Unindent();
+				ImGui::PopID();
+			}
+		}
+
+		ImGui::End();
+
+		if (changed)
+		{
+			auto& cmds = SingletonView<EditorCommandsSingleton>();
+			const bool saved = cmds.SaveProject && cmds.SaveProject();
+			if (!saved)
+			{
+				notify.Push("Layer change not saved to the project file", EditorToastType::Error);
+			}
+		}
 	}
 
 	void EditorMenuSystem::DrawShortcutsWindow()

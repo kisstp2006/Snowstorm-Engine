@@ -11,8 +11,10 @@
 #include "Snowstorm/World/SimulationStateSingleton.hpp"
 #include "Snowstorm/World/World.hpp"
 
+#include "Snowstorm/Components/IDComponent.hpp"
 #include "Snowstorm/Components/PhysicsComponents.hpp"
 #include "Snowstorm/Physics/PhysicsLayer.hpp"
+#include "SnowstormPhysics/JoltPhysics/JoltCharacterController.hpp"
 #include "SnowstormPhysics/JoltPhysics/JoltScene.hpp"
 #include "SnowstormPhysics/PhysicsJoltModule.hpp"
 #include "SnowstormPhysics/PhysicsSystems.hpp"
@@ -158,4 +160,163 @@ TEST_CASE("Bodies authored in Edit mode all wake up when Play starts", "[physics
 	// Both fell — not just the one that happened to be touched last.
 	REQUIRE(a.GetComponent<TransformComponent>().Translation.y < 0.0f);
 	REQUIRE(b.GetComponent<TransformComponent>().Translation.y < 0.0f);
+}
+
+TEST_CASE("A character controller lands on a floor and is moved by Move(), not by the solver", "[physics][character]")
+{
+	const int prevHz = CVars::SimFixedHz.Get();
+	CVars::SimFixedHz.Set(60);
+
+	PhysicsWorld world;
+	world.W.GetSingletonManager().RegisterSingleton<SimulationStateSingleton>();
+	world.W.GetSingleton<SimulationStateSingleton>().Current = SimulationStateSingleton::Mode::Play;
+	world.Box("Floor", {0.0f, -0.5f, 0.0f}, {20.0f, 1.0f, 20.0f}, EBodyType::Static);
+
+	// A capsule character dropped above the floor. No RigidBodyComponent: the character IS the movement.
+	Entity player = world.W.CreateEntity("Player");
+	auto& tr = player.AddComponent<TransformComponent>();
+	tr.Translation = {0.0f, 3.0f, 0.0f};
+	auto& capsule = player.AddComponent<CapsuleColliderComponent>();
+	capsule.Radius = 0.3f;
+	capsule.HalfHeight = 0.6f;
+	capsule.Offset = {0.0f, 0.9f, 0.0f}; // capsule sits ON the entity origin, so the origin is at its feet
+	player.AddComponent<CharacterControllerComponent>();
+
+	world.Step(2); // sync systems build the character
+	REQUIRE(player.HasComponent<CharacterControllerRuntimeComponent>());
+	const Ref<JoltCharacterController> controller = player.GetComponent<CharacterControllerRuntimeComponent>().Controller;
+	REQUIRE(controller);
+	REQUIRE(controller->IsValid());
+
+	// A character is NOT a rigid body: it must not also show up as one (an implicit static body built
+	// from its colliders would be an immovable clone of the player standing in the player's way).
+	REQUIRE_FALSE(player.HasComponent<PhysicsBodyRuntimeComponent>());
+
+	SECTION("Gravity lands it on the floor and it stays there")
+	{
+		world.Step(120);
+		REQUIRE(controller->IsGrounded());
+		const float y = player.GetComponent<TransformComponent>().Translation.y;
+		REQUIRE(y == Catch::Approx(0.0f).margin(0.06f)); // feet on the floor
+
+		world.Step(120); // and it does not keep sinking or jitter away
+		REQUIRE(controller->IsGrounded());
+		REQUIRE(player.GetComponent<TransformComponent>().Translation.y == Catch::Approx(y).margin(0.02f));
+	}
+
+	SECTION("Move() displaces it along the floor")
+	{
+		world.Step(120); // land first
+		const glm::vec3 start = player.GetComponent<TransformComponent>().Translation;
+
+		// 3 m/s along +X for 60 fixed steps (one second) -> ~3 m, with nothing in the way.
+		for (int i = 0; i < 60; ++i)
+		{
+			controller->Move({3.0f / 60.0f, 0.0f, 0.0f});
+			world.Step(1);
+		}
+		const glm::vec3 end = player.GetComponent<TransformComponent>().Translation;
+		REQUIRE(end.x - start.x == Catch::Approx(3.0f).margin(0.35f));
+		REQUIRE(end.z == Catch::Approx(start.z).margin(0.01f));
+		REQUIRE(controller->IsGrounded());
+	}
+
+	SECTION("A wall stops it instead of letting it pass through")
+	{
+		world.Step(120);
+		world.Box("Wall", {1.5f, 1.0f, 0.0f}, {0.5f, 4.0f, 8.0f}, EBodyType::Static);
+		world.Step(2);
+
+		for (int i = 0; i < 90; ++i)
+		{
+			controller->Move({4.0f / 60.0f, 0.0f, 0.0f});
+			world.Step(1);
+		}
+		// Walked into the wall (x = 1.25 is its near face) and stopped short of it, not through it.
+		REQUIRE(player.GetComponent<TransformComponent>().Translation.x < 1.25f);
+	}
+
+	SECTION("Jump() leaves the ground and gravity brings it back")
+	{
+		world.Step(120);
+		const float restY = player.GetComponent<TransformComponent>().Translation.y;
+
+		controller->Jump(5.0f);
+		world.Step(10);
+		REQUIRE_FALSE(controller->IsGrounded());
+		REQUIRE(player.GetComponent<TransformComponent>().Translation.y > restY + 0.2f);
+
+		world.Step(180);
+		REQUIRE(controller->IsGrounded());
+		REQUIRE(player.GetComponent<TransformComponent>().Translation.y == Catch::Approx(restY).margin(0.06f));
+	}
+
+	CVars::SimFixedHz.Set(prevHz);
+}
+
+TEST_CASE("Scene queries hit the bodies they should and skip the excluded ones", "[physics][queries]")
+{
+	PhysicsWorld world;
+	world.W.GetSingletonManager().RegisterSingleton<SimulationStateSingleton>();
+	const Entity floor = world.Box("Floor", {0.0f, -0.5f, 0.0f}, {20.0f, 1.0f, 20.0f}, EBodyType::Static);
+	const Entity wall = world.Box("Wall", {5.0f, 1.0f, 0.0f}, {1.0f, 4.0f, 8.0f}, EBodyType::Static);
+	world.Step(2);
+
+	const Snowstorm::UUID floorId = floor.GetComponent<IDComponent>().Id;
+	const Snowstorm::UUID wallId = wall.GetComponent<IDComponent>().Id;
+	auto& scene = world.W.GetSingleton<JoltScene>();
+
+	SECTION("A ray finds the wall, and reports the distance to it")
+	{
+		RayCastInfo ray;
+		ray.Origin = {0.0f, 1.0f, 0.0f};
+		ray.Direction = {1.0f, 0.0f, 0.0f};
+		ray.MaxDistance = 20.0f;
+
+		SceneQueryHit hit;
+		REQUIRE(scene.CastRay(ray, hit));
+		REQUIRE(hit.HitEntity == wallId);
+		REQUIRE(hit.Distance == Catch::Approx(4.5f).margin(0.05f)); // wall spans x = 4.5 .. 5.5
+	}
+
+	SECTION("Excluding the wall lets the ray miss everything")
+	{
+		RayCastInfo ray;
+		ray.Origin = {0.0f, 1.0f, 0.0f};
+		ray.Direction = {1.0f, 0.0f, 0.0f};
+		ray.MaxDistance = 20.0f;
+		ray.ExcludedEntities = {wallId};
+
+		SceneQueryHit hit;
+		REQUIRE_FALSE(scene.CastRay(ray, hit));
+	}
+
+	SECTION("A sphere cast stops earlier than a ray, because it has a radius")
+	{
+		SphereCastInfo sphere;
+		sphere.Radius = 0.5f;
+		sphere.Origin = {0.0f, 1.0f, 0.0f};
+		sphere.Direction = {1.0f, 0.0f, 0.0f};
+		sphere.MaxDistance = 20.0f;
+
+		SceneQueryHit hit;
+		REQUIRE(scene.CastShape(sphere, hit));
+		REQUIRE(hit.HitEntity == wallId);
+		REQUIRE(hit.Distance == Catch::Approx(4.0f).margin(0.05f)); // 4.5 minus the radius
+	}
+
+	SECTION("An overlap reports what a box is standing in, and nothing where it is empty")
+	{
+		BoxCastInfo box;
+		box.HalfExtent = {0.4f, 0.4f, 0.4f};
+		box.Origin = {0.0f, 0.2f, 0.0f}; // straddling the floor's top face
+
+		std::vector<SceneQueryHit> hits;
+		REQUIRE(scene.OverlapShape(box, hits) == 1);
+		REQUIRE(hits[0].HitEntity == floorId);
+
+		box.Origin = {0.0f, 6.0f, 0.0f}; // mid-air
+		REQUIRE(scene.OverlapShape(box, hits) == 0);
+		REQUIRE(hits.empty());
+	}
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "JoltBody.hpp"
+#include "JoltCharacterController.hpp"
 #include "JoltContactListener.hpp"
 #include "JoltLayerInterface.hpp"
 
@@ -55,8 +56,25 @@ namespace Snowstorm
 
 		void Teleport(Entity entity, const glm::vec3& targetPosition, const glm::quat& targetRotation, bool force = false);
 
+		//// Characters ////
+		// Kinematic characters live beside the rigid bodies: same "one per entity, keyed by UUID" model,
+		// but stepped by JoltScene::Simulate after the world step (they sweep against the world's CURRENT
+		// state, so they must run once the bodies have moved).
+		Ref<JoltCharacterController> CreateCharacterController(Entity entity);
+		void DestroyCharacterController(Entity entity);
+		void DestroyCharacterControllerByEntityID(UUID entityID);
+		[[nodiscard]] Ref<JoltCharacterController> GetCharacterController(Entity entity) const;
+		[[nodiscard]] const std::unordered_map<UUID, Ref<JoltCharacterController>>& GetCharacterControllers() const { return m_Characters; }
+
 		//// Geometry queries ////
+		// All of them report the FIRST/closest hit and answer false when nothing was hit. Excluded
+		// entities are skipped (a script casting from its own body would otherwise always hit itself).
 		bool CastRay(const RayCastInfo& rayCastInfo, SceneQueryHit& outHit) const;
+		// Sweep a box/sphere/capsule along a direction -- what a ray can't answer: whether a body of a
+		// given SIZE fits through. Pass the concrete BoxCastInfo/SphereCastInfo/CapsuleCastInfo.
+		bool CastShape(const ShapeCastInfo& shapeCastInfo, SceneQueryHit& outHit) const;
+		// Everything currently intersecting a shape at a point (no sweep). Returns the number written.
+		uint32_t OverlapShape(const ShapeCastInfo& shapeCastInfo, std::vector<SceneQueryHit>& outHits) const;
 
 		//// Diagnostics ////
 		void DrawDebug(DebugDrawSingleton& out);
@@ -65,6 +83,7 @@ namespace Snowstorm
 		[[nodiscard]] uint32_t GetContactCountLastStep() const { return m_ContactsLastStep; }
 
 		[[nodiscard]] JPH::PhysicsSystem& GetJoltSystem() { return *m_System; }
+		[[nodiscard]] JPH::TempAllocator& GetTempAllocator() { return *m_TempAllocator; }
 		[[nodiscard]] World& GetEntityWorld() const { return *m_EntityWorld; }
 
 		// Called by the contact listener from Jolt's worker threads.
@@ -83,6 +102,7 @@ namespace Snowstorm
 		JoltContactListener m_ContactListener;
 
 		std::unordered_map<UUID, Ref<JoltBody>> m_RigidBodies;
+		std::unordered_map<UUID, Ref<JoltCharacterController>> m_Characters;
 		std::unordered_map<uint32_t, UUID> m_BodyToEntity; // BodyID -> entity UUID (safe after a body is gone)
 
 		struct ContactEvent

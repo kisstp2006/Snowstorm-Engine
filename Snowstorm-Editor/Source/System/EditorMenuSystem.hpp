@@ -35,11 +35,19 @@ namespace Snowstorm
 		// actual bindings whenever a shortcut is added or changed — see CLAUDE.md.
 		void DrawShortcutsWindow();
 
+		// Project-scoped settings, i.e. what lives in the .ssproj rather than in the CVar config: today
+		// the physics layers + their collision matrix. Same place every engine puts it (Unity Project
+		// Settings > Physics > Layer Collision Matrix, Unreal Project Settings > Collision, Godot Project
+		// Settings > Layer Names), and deliberately NOT the "Settings" panel, which is render tuning.
+		void DrawProjectSettingsWindow(EditorNotificationsSingleton& notify);
+
 		bool m_ShowImportPopup = false;
 		bool m_ShowNewProjectPopup = false;
 		bool m_ShowShortcuts = false;
+		bool m_ShowProjectSettings = false;
 		char m_ImportPathBuffer[512] = {};
 		char m_NewProjectNameBuffer[128] = {};
 		char m_NewProjectLocationBuffer[512] = {};
+		char m_NewLayerNameBuffer[64] = {};
 	};
 }

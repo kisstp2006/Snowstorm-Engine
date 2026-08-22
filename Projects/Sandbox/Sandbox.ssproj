@@ -3,6 +3,13 @@
     "AssetDirectory": "assets",
     "AssetRegistryPath": "assets/AssetRegistry.json",
     "Name": "Sandbox",
+    "PhysicsLayers": [
+      {
+        "CollidesWith": [],
+        "CollidesWithSelf": true,
+        "Name": "Default"
+      }
+    ],
     "StartScene": "assets/scenes/Sponza.world"
   }
 }

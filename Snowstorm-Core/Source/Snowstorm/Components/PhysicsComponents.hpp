@@ -37,6 +37,22 @@ namespace Snowstorm
 		uint32_t LockedAxes = 0; // EActorAxis bits (stored as a mask so the inspector/JSON treat it as flags)
 	};
 
+	// A kinematic character (Hazel CharacterControllerComponent). NOT a rigid body: the solver never
+	// pushes it -- a script moves it explicitly (Move/Jump) and it slides along geometry, walks up steps
+	// and refuses slopes steeper than SlopeLimitDeg. Same model as Unity's CharacterController, Unreal's
+	// CharacterMovementComponent and Godot's CharacterBody3D, and backed by JPH::CharacterVirtual.
+	// The entity's collider components define its shape (a capsule, normally); a RigidBodyComponent on the
+	// same entity is redundant -- the character owns the movement.
+	struct CharacterControllerComponent
+	{
+		float SlopeLimitDeg = 45.0f; // steepest slope it can still walk up
+		float StepOffset = 0.3f;     // step height it climbs without jumping
+		uint32_t LayerID = 0;        // PhysicsLayerManager layer
+		bool DisableGravity = false;
+		bool ControlMovementInAir = false; // can Move() steer while airborne
+		bool ControlRotationInAir = false; // can Rotate() turn while airborne
+	};
+
 	// Groups child entities' colliders into this entity's body. Without it, child colliders of a
 	// RigidBody entity still fold in when IncludeStaticChildColliders semantics apply (the default walk);
 	// with it, the listed entities are compounded explicitly.
