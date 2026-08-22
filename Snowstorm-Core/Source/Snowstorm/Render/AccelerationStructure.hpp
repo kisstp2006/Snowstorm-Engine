@@ -10,6 +10,8 @@
 
 namespace Snowstorm
 {
+	class CommandContext;
+
 	// Opacity micromap (VK_EXT_opacity_micromap, RDNA4 / Ada+): a per-triangle table of per-microtriangle
 	// opacity states (4-state, 2 bits each) attached to a BLAS so the hardware resolves cutout coverage during
 	// traversal and invokes the any-hit alpha test only on UNKNOWN (edge) microtriangles. Backend-agnostic
@@ -56,14 +58,26 @@ namespace Snowstorm
 		// GPU device address of the built AS, used as an instance's accelerationStructureReference in a TLAS.
 		[[nodiscard]] virtual uint64_t GetDeviceAddress() const = 0;
 
+		// Rebuild this AS in place from its (unchanged) buffers, whose CONTENTS have moved -- the GPU skin
+		// cache case. An update reuses the existing tree topology instead of rebuilding it, which is far
+		// cheaper but degrades trace quality as the pose drifts from the one the tree was built for; a
+		// character that deforms wildly wants a periodic full rebuild. Only valid on a BLAS created with
+		// allowUpdate; a no-op otherwise.
+		virtual void RecordRefit(CommandContext& ctx) = 0;
+
+		[[nodiscard]] virtual bool IsUpdatable() const = 0;
+
 		// Build a triangle BLAS from a mesh's vertex/index buffers (both must carry the AS-build-input usage;
 		// see VulkanBuffer). positionOffset + vertexStride locate the R32G32B32 position inside each vertex.
 		// Synchronous — builds on ImmediateSubmit (graphics queue) and returns once complete. When `micromap`
 		// is non-null the geometry is built non-opaque with the micromap chained in, so cutout coverage is
 		// resolved per-microtriangle during traversal (the alpha any-hit runs only on UNKNOWN microtriangles).
+		// `allowUpdate` asks for an AS that Refit() can update later (skinned meshes). It is NOT the default:
+		// it costs memory and a little trace performance, which every static mesh in the scene would pay.
 		static Ref<BLAS> Create(const Ref<Buffer>& vertexBuffer, uint32_t vertexCount, uint32_t vertexStride,
 		                        uint32_t positionOffset, const Ref<Buffer>& indexBuffer, uint32_t indexCount,
-		                        const std::string& debugName = "", const Ref<Micromap>& micromap = nullptr);
+		                        const std::string& debugName = "", const Ref<Micromap>& micromap = nullptr,
+		                        bool allowUpdate = false);
 	};
 
 	// One renderable in a TLAS: a mesh's BLAS placed by a world transform. The build reads BlasAddress
@@ -87,11 +101,16 @@ namespace Snowstorm
 	public:
 		virtual ~TLAS() = default;
 
-		// (Re)build the TLAS from the given instances. Synchronous — builds on ImmediateSubmit (graphics
-		// queue). Empty instance list => an empty (but valid) TLAS. A full rebuild each call: the scene's
-		// instance count is small and TlasBuildSystem only calls this when the scene actually changed, so the
-		// cost is negligible; incremental refit (UPDATE mode) is a deferred optimization, not needed here.
-		virtual void Build(const std::vector<TLASInstance>& instances) = 0;
+		// CPU half of a rebuild: fill the instance array and make sure the AS + scratch are big enough.
+		// Returns true when the acceleration structure was (re)created, which is the caller's cue to
+		// re-point the bindless descriptor at it -- normally false, because the AS is reused in place.
+		virtual bool Prepare(const std::vector<TLASInstance>& instances) = 0;
+
+		// GPU half: record the build into the frame's command buffer, between the barriers the caller
+		// emits. Recorded rather than immediately submitted so it lands AFTER this frame's skinning and
+		// BLAS refits -- an immediate submit would run before the whole frame, which is what used to force
+		// the ray-traced view of a skinned mesh to trail the rasterized one by a frame.
+		virtual void RecordBuild(CommandContext& ctx) = 0;
 
 		[[nodiscard]] virtual uint32_t GetInstanceCount() const = 0;
 

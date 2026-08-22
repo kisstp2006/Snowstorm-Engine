@@ -203,6 +203,7 @@ namespace Snowstorm
 
 			SkinnedSubmesh submesh;
 			submesh.Name = mesh->mName.C_Str();
+			submesh.MaterialIndex = mesh->mMaterialIndex;
 			submesh.Mesh.Vertices.reserve(mesh->mNumVertices);
 			for (uint32_t v = 0; v < mesh->mNumVertices; ++v)
 			{
@@ -317,11 +318,19 @@ namespace Snowstorm
 		}
 
 		std::vector<std::string> parts;
-		parts.reserve(model->Clips.size() + 1);
+		parts.reserve(model->Clips.size() + model->Submeshes.size() + 1);
 		parts.emplace_back("skeleton");
 		for (const AnimationClip& clip : model->Clips)
 		{
 			parts.push_back("animation=" + clip.GetName());
+		}
+		// Skinned geometry is its OWN part key, not "submesh=N": the static import path runs
+		// PreTransformVertices, which is free to merge and reorder meshes, so index N there is not index N
+		// here. Sharing the key would silently bind a character to someone else's geometry. The key also
+		// tells the loader which import path to use.
+		for (size_t i = 0; i < model->Submeshes.size(); ++i)
+		{
+			parts.push_back("skinnedmesh=" + std::to_string(i));
 		}
 		return parts;
 	}

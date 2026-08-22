@@ -1,0 +1,104 @@
+{
+  "Entities": [
+    {
+      "Components": {
+        "Snowstorm::DirectionalLightComponent": {
+          "CastShadows": true,
+          "Direction": [
+            0.5121475458145142,
+            -0.3841106593608856,
+            0.7682213187217712
+          ],
+          "Enabled": true,
+          "Intensity": 0.4000000059604645,
+          "LightSize": 0.5299999713897705,
+          "Radiance": [
+            0.6000000238418579,
+            0.699999988079071,
+            0.8999999761581421
+          ],
+          "ShadowAmount": 1.0,
+          "SoftShadows": true
+        },
+        "Snowstorm::VisibilityComponent": {
+          "Mask": 3
+        }
+      },
+      "Name": "Sky (fill)",
+      "UUID": "991108565328862534"
+    },
+    {
+      "Components": {
+        "Snowstorm::DirectionalLightComponent": {
+          "CastShadows": true,
+          "Direction": [
+            -0.4319342076778412,
+            -0.8638684153556824,
+            -0.2591605484485626
+          ],
+          "Enabled": true,
+          "Intensity": 1.0,
+          "LightSize": 0.5299999713897705,
+          "Radiance": [
+            1.0,
+            0.9700000286102295,
+            0.8999999761581421
+          ],
+          "ShadowAmount": 1.0,
+          "SoftShadows": true
+        },
+        "Snowstorm::VisibilityComponent": {
+          "Mask": 3
+        }
+      },
+      "Name": "Sun (key)",
+      "UUID": "9278734279936999517"
+    },
+    {
+      "Components": {
+        "Snowstorm::AnimationComponent": {
+          "Clip": "7100000000000000003",
+          "Loop": true,
+          "Playing": true,
+          "Speed": 1.0,
+          "Time": 0.0
+        },
+        "Snowstorm::MaterialComponent": {
+          "Material": "3038621053145143790"
+        },
+        "Snowstorm::MeshComponent": {
+          "Mesh": "7100000000000000004"
+        },
+        "Snowstorm::SkeletalMeshComponent": {
+          "Skeleton": "7100000000000000002"
+        },
+        "Snowstorm::TransformComponent": {
+          "Position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "Snowstorm::VisibilityComponent": {
+          "Mask": 3
+        }
+      },
+      "Name": "SkinProbe/meshes[0]",
+      "UUID": "17015423069439073817"
+    }
+  ],
+  "Scene": {
+    "Name": "Untitled",
+    "Version": 3
+  }
+}

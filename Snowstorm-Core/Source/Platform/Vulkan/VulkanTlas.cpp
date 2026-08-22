@@ -1,5 +1,7 @@
 #include "VulkanTlas.hpp"
 
+#include "VulkanCommandContext.hpp"
+
 #include "Snowstorm/Core/Base.hpp"
 #include "Snowstorm/Core/Log.hpp"
 
@@ -95,19 +97,14 @@ namespace Snowstorm
 			m_AsBuffer = VK_NULL_HANDLE;
 			m_AsAllocation = nullptr;
 		}
+		m_AsCapacity = 0; // or the next Prepare would think the (now destroyed) AS is still big enough
 	}
 
-	void VulkanTlas::Build(const std::vector<TLASInstance>& instances)
+	bool VulkanTlas::Prepare(const std::vector<TLASInstance>& instances)
 	{
 		const VkDevice device = GetVulkanDevice();
 		const uint32_t count = static_cast<uint32_t>(instances.size());
 		m_InstanceCount = count;
-
-		// The previous AS/backing must be torn down before we build a new one (rebuild-each-call). The GPU
-		// isn't using it here — TlasBuildSystem runs in PreRender, before this frame's ray-query pass, and the
-		// prior build's ImmediateSubmit already fenced. A device wait keeps it simple and safe at this scale.
-		vkDeviceWaitIdle(device);
-		Destroy();
 
 		// 1. Fill the host-visible instance array. Vulkan wants a row-major 3x4 (transform[row][col]); glm is
 		//    column-major, so transpose the upper 3x4 of each world matrix.
@@ -163,19 +160,46 @@ namespace Snowstorm
 		vkGetAccelerationStructureBuildSizesKHR(device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
 		                                        &buildInfo, &count, &sizeInfo);
 
-		// AS storage is freed+recreated every Build (Destroy() nulls m_AsBuffer above), so a throwaway
-		// zero capacity forces a fresh allocation each call.
-		VkDeviceSize asCapacity = 0;
-		EnsureBuffer(sizeInfo.accelerationStructureSize, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR,
-		             false, 0, m_AsBuffer, m_AsAllocation, asCapacity,
-		             m_DebugName.empty() ? "TLAS" : m_DebugName.c_str());
+		// The AS is REUSED in place across frames -- that is the whole point of recording the build into the
+		// frame's command buffer, and it is what lets the bindless descriptor be written once instead of per
+		// frame (a single global TLAS slot cannot be rewritten while earlier frames are still tracing it).
+		// It is only recreated when the scene outgrows it, which needs a device wait: the old AS may still be
+		// in flight, and the descriptor has to be re-pointed. Rare, and loud.
+		bool recreated = false;
+		if (m_AccelStruct == VK_NULL_HANDLE || sizeInfo.accelerationStructureSize > m_AsCapacity)
+		{
+			vkDeviceWaitIdle(device);
+			if (m_AccelStruct != VK_NULL_HANDLE)
+			{
+				vkDestroyAccelerationStructureKHR(device, m_AccelStruct, nullptr);
+				m_AccelStruct = VK_NULL_HANDLE;
+			}
+			if (m_AsBuffer != VK_NULL_HANDLE)
+			{
+				vmaDestroyBuffer(GetAllocator(), m_AsBuffer, m_AsAllocation);
+				m_AsBuffer = VK_NULL_HANDLE;
+				m_AsAllocation = nullptr;
+			}
 
-		VkAccelerationStructureCreateInfoKHR createInfo{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};
-		createInfo.buffer = m_AsBuffer;
-		createInfo.size = sizeInfo.accelerationStructureSize;
-		createInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
-		SS_CORE_VERIFY(vkCreateAccelerationStructureKHR(device, &createInfo, nullptr, &m_AccelStruct) == VK_SUCCESS,
-		               "Failed to create TLAS");
+			// Headroom so a scene that grows by an object at a time doesn't recreate (and stall) every frame.
+			m_AsCapacity = sizeInfo.accelerationStructureSize + sizeInfo.accelerationStructureSize / 2;
+			VkDeviceSize unused = 0;
+			EnsureBuffer(m_AsCapacity, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, false, 0,
+			             m_AsBuffer, m_AsAllocation, unused, m_DebugName.empty() ? "TLAS" : m_DebugName.c_str());
+
+			VkAccelerationStructureCreateInfoKHR createInfo{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};
+			createInfo.buffer = m_AsBuffer;
+			createInfo.size = m_AsCapacity;
+			createInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
+			SS_CORE_VERIFY(vkCreateAccelerationStructureKHR(device, &createInfo, nullptr, &m_AccelStruct) == VK_SUCCESS,
+			               "Failed to create TLAS");
+			if (!m_DebugName.empty())
+			{
+				SetVulkanObjectName(device, reinterpret_cast<uint64_t>(m_AccelStruct),
+				                    VK_OBJECT_TYPE_ACCELERATION_STRUCTURE_KHR, m_DebugName.c_str());
+			}
+			recreated = true;
+		}
 
 		// 4. Scratch, aligned to the device requirement.
 		VkPhysicalDeviceAccelerationStructurePropertiesKHR asProps{
@@ -191,17 +215,23 @@ namespace Snowstorm
 		buildInfo.dstAccelerationStructure = m_AccelStruct;
 		buildInfo.scratchData.deviceAddress = RawBufferAddress(m_ScratchBuffer);
 
-		VkAccelerationStructureBuildRangeInfoKHR rangeInfo{};
-		rangeInfo.primitiveCount = count;
-		const VkAccelerationStructureBuildRangeInfoKHR* pRange = &rangeInfo;
+		// Keep both alive for RecordBuild: pGeometries points at m_Geometry, so a local would dangle.
+		m_Geometry = geometry;
+		m_BuildInfo = buildInfo;
+		m_BuildInfo.pGeometries = &m_Geometry;
+		return recreated;
+	}
 
-		ImmediateSubmit([&](const VkCommandBuffer cmd)
-		                { vkCmdBuildAccelerationStructuresKHR(cmd, 1, &buildInfo, &pRange); });
-
-		if (!m_DebugName.empty())
+	void VulkanTlas::RecordBuild(CommandContext& ctx)
+	{
+		if (m_AccelStruct == VK_NULL_HANDLE)
 		{
-			SetVulkanObjectName(device, reinterpret_cast<uint64_t>(m_AccelStruct),
-			                    VK_OBJECT_TYPE_ACCELERATION_STRUCTURE_KHR, m_DebugName.c_str());
+			return;
 		}
+		VkAccelerationStructureBuildRangeInfoKHR rangeInfo{};
+		rangeInfo.primitiveCount = m_InstanceCount;
+		const VkAccelerationStructureBuildRangeInfoKHR* pRange = &rangeInfo;
+		vkCmdBuildAccelerationStructuresKHR(static_cast<VulkanCommandContext&>(ctx).GetCommandBuffer(), 1,
+		                                    &m_BuildInfo, &pRange);
 	}
 }

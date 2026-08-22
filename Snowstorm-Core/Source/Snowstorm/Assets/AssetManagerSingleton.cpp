@@ -1,6 +1,8 @@
 #include "AssetManagerSingleton.hpp"
 
 #include "Snowstorm/Animation/SkinnedMeshImporter.hpp"
+#include "Snowstorm/Assets/SkinnedModelCache.hpp"
+#include "Snowstorm/Components/AnimationComponents.hpp"
 
 #include "AssetFileTime.hpp"
 #include "MeshBoundsBuilder.hpp"
@@ -332,6 +334,64 @@ namespace Snowstorm
 			}
 		}
 
+		// A skinned source is imported as SKELETAL entities instead: its geometry comes from the skinned
+		// path (the static parse above pre-transformed the vertices and dropped the bones), and each entity
+		// gets the skeleton and, when the file has one, a clip to play. Without this a character imports as
+		// a pile of static meshes frozen in the bind pose, and the only way to animate it is to hand-write
+		// the scene.
+		const std::filesystem::path modelFileAbs = Registry().Resolve(modelPathStr);
+		if (const std::vector<std::string> skinnedParts = EnumerateSkinnedSubAssetParts(modelFileAbs); !skinnedParts.empty())
+		{
+			for (const std::string& part : skinnedParts)
+			{
+				Import(modelPathStr + "?" + part, AssetRegistry::TypeForPart(part, AssetType::Mesh));
+			}
+
+			const AssetHandle skeletonHandle = Import(modelPathStr + "?skeleton", AssetType::Skeleton);
+			// The first clip in the file is a reasonable default to start playing -- an imported character
+			// that stands in its bind pose looks broken, and picking one is a single click to change.
+			AssetHandle clipHandle{0};
+			for (const std::string& part : skinnedParts)
+			{
+				if (part.starts_with("animation="))
+				{
+					clipHandle = Import(modelPathStr + "?" + part, AssetType::Animation);
+					break;
+				}
+			}
+
+			std::string skinnedError;
+			const std::optional<SkinnedModel> skinned = ImportSkinnedModel(modelFileAbs, skinnedError);
+			if (skinned)
+			{
+				for (size_t i = 0; i < skinned->Submeshes.size(); ++i)
+				{
+					const SkinnedSubmesh& submesh = skinned->Submeshes[i];
+					const AssetHandle meshHandle =
+					    Import(modelPathStr + "?skinnedmesh=" + std::to_string(i), AssetType::Mesh);
+
+					Entity e = m_World->CreateEntity(
+					    modelStem + "/" + (submesh.Name.empty() ? "skinned" + std::to_string(i) : submesh.Name));
+					e.AddComponent<TransformComponent>();
+					e.AddComponent<MeshComponent>().Mesh = meshHandle;
+					if (submesh.MaterialIndex < materialHandles.size())
+					{
+						e.AddComponent<MaterialComponent>().Material = materialHandles[submesh.MaterialIndex];
+					}
+					e.AddComponent<SkeletalMeshComponent>().Skeleton = skeletonHandle;
+					auto& animation = e.AddComponent<AnimationComponent>();
+					animation.Clip = clipHandle;
+					e.AddComponent<VisibilityComponent>().Mask = Visibility::Scene | Visibility::Game;
+					created.push_back(e);
+				}
+			}
+
+			SS_CORE_INFO("ImportModel: {} -> {} skinned entities, {} bone(s), {} clip(s)", path.string(),
+			             created.size(), skinned ? skinned->Bones.GetBoneCount() : 0,
+			             skinned ? skinned->Clips.size() : 0);
+			return created;
+		}
+
 		for (uint32_t i = 0; i < scene->mNumMeshes; ++i)
 		{
 			const aiMesh* aiSub = scene->mMeshes[i];
@@ -364,18 +424,6 @@ namespace Snowstorm
 			created.push_back(e);
 		}
 
-		// A skinned source contributes more than meshes: one Skeleton and one Animation per clip, each its
-		// own sub-asset so a scene can reference a clip directly. Discovering them needs a SECOND assimp
-		// read, because the one above ran PreTransformVertices -- which deletes exactly the bones and
-		// animations we are looking for. That cost is paid at import time only, never on load.
-		{
-			const std::filesystem::path modelFile = Registry().Resolve(modelPathStr);
-			for (const std::string& part : EnumerateSkinnedSubAssetParts(modelFile))
-			{
-				Import(modelPathStr + "?" + part, AssetRegistry::TypeForPart(part, AssetType::Mesh));
-			}
-		}
-
 		SS_CORE_INFO("ImportModel: {} -> {} entities, {} materials", path.string(), created.size(), scene->mNumMaterials);
 		return created;
 	}
@@ -403,6 +451,194 @@ namespace Snowstorm
 		return nullptr;
 	}
 
+	const AssetManagerSingleton::LoadedSkinnedModel* AssetManagerSingleton::LoadSkinnedModelFor(
+	    const AssetHandle handle, const AssetMetadata& meta)
+	{
+		const std::filesystem::path sourcePath = ResolveAssetPath(AssetRegistry::SourcePathOf(meta.Path));
+		const std::string key = sourcePath.generic_string();
+		if (const auto it = m_SkinnedModelCache.find(key); it != m_SkinnedModelCache.end())
+		{
+			return &it->second;
+		}
+
+		// Cooked blob first: importing a character means an assimp parse of the whole file, and the result
+		// is exactly what the blob holds. Keyed on the SOURCE model's handle and its content hash, so
+		// editing the file (or its import settings) misses and re-cooks.
+		const AssetHandle sourceHandle = m_Registry.FindHandleByPath(AssetRegistry::SourcePathOf(meta.Path), AssetType::Mesh);
+		const uint64_t sourceKey = m_Registry.SourceKey(handle);
+		std::optional<SkinnedModel> imported;
+		bool fromCache = false;
+		if (sourceHandle.Value() != 0)
+		{
+			imported = SkinnedModelCache::Load(sourceHandle, sourceKey);
+			fromCache = imported.has_value();
+		}
+
+		std::string error;
+		if (!imported)
+		{
+			imported = ImportSkinnedModel(sourcePath, error);
+		}
+		if (!imported)
+		{
+			// Fail loud once: a scene referencing a skeleton whose source stopped being skinned (or moved)
+			// otherwise renders a bind-pose model with no explanation.
+			if (m_WarnedHandles.insert(handle).second)
+			{
+				SS_CORE_ERROR("Animation: '{}' has no skinned data ({}).", sourcePath.string(), error);
+			}
+			return nullptr;
+		}
+
+		if (!fromCache && sourceHandle.Value() != 0)
+		{
+			SkinnedModelCache::Save(sourceHandle, sourceKey, *imported);
+		}
+
+		LoadedSkinnedModel loaded;
+		loaded.Bones = CreateRef<Skeleton>(std::move(imported->Bones));
+		loaded.Submeshes = std::move(imported->Submeshes);
+		for (AnimationClip& clip : imported->Clips)
+		{
+			std::string name = clip.GetName();
+			loaded.ClipsByName.emplace(std::move(name), CreateRef<AnimationClip>(std::move(clip)));
+		}
+		return &(m_SkinnedModelCache[key] = std::move(loaded));
+	}
+
+	Ref<Skeleton> AssetManagerSingleton::GetSkeleton(const AssetHandle handle)
+	{
+		if (handle == 0)
+		{
+			return nullptr;
+		}
+		if (const auto it = m_SkeletonCache.find(handle); it != m_SkeletonCache.end())
+		{
+			return it->second;
+		}
+		const AssetMetadata* meta = ResolveMetaOrWarn(handle, AssetType::Skeleton, "skeleton");
+		if (!meta)
+		{
+			return nullptr;
+		}
+		const LoadedSkinnedModel* model = LoadSkinnedModelFor(handle, *meta);
+		if (!model)
+		{
+			return nullptr;
+		}
+		m_SkeletonCache[handle] = model->Bones;
+		return model->Bones;
+	}
+
+	Ref<AnimationClip> AssetManagerSingleton::GetAnimation(const AssetHandle handle)
+	{
+		if (handle == 0)
+		{
+			return nullptr;
+		}
+		if (const auto it = m_AnimationCache.find(handle); it != m_AnimationCache.end())
+		{
+			return it->second;
+		}
+		const AssetMetadata* meta = ResolveMetaOrWarn(handle, AssetType::Animation, "animation");
+		if (!meta)
+		{
+			return nullptr;
+		}
+		const LoadedSkinnedModel* model = LoadSkinnedModelFor(handle, *meta);
+		if (!model)
+		{
+			return nullptr;
+		}
+
+		// The handle's path carries the clip NAME ("model.gltf?animation=Walk"); that is the clip's
+		// identity, so a re-export that reorders the clips still resolves the same one.
+		const std::string path = meta->Path.generic_string();
+		const size_t marker = path.find("?animation=");
+		if (marker == std::string::npos)
+		{
+			return nullptr;
+		}
+		const std::string clipName = path.substr(marker + std::string_view("?animation=").size());
+
+		const auto clip = model->ClipsByName.find(clipName);
+		if (clip == model->ClipsByName.end())
+		{
+			if (m_WarnedHandles.insert(handle).second)
+			{
+				SS_CORE_ERROR("Animation: '{}' has no clip named '{}' (it was renamed or removed).",
+				              path, clipName);
+			}
+			return nullptr;
+		}
+		m_AnimationCache[handle] = clip->second;
+		return clip->second;
+	}
+
+	const AssetManagerSingleton::SkinnedMeshGpu* AssetManagerSingleton::GetSkinnedMesh(const AssetHandle handle)
+	{
+		if (handle == 0)
+		{
+			return nullptr;
+		}
+		if (const auto it = m_SkinnedMeshCache.find(handle); it != m_SkinnedMeshCache.end())
+		{
+			return &it->second;
+		}
+		const AssetMetadata* meta = ResolveMetaOrWarn(handle, AssetType::Mesh, "skinned mesh");
+		if (!meta)
+		{
+			return nullptr;
+		}
+
+		const std::string path = meta->Path.generic_string();
+		const size_t marker = path.find("?skinnedmesh=");
+		if (marker == std::string::npos)
+		{
+			return nullptr; // an ordinary mesh handle: not this path's business
+		}
+		const uint32_t submeshIndex = static_cast<uint32_t>(
+		    std::strtoul(path.c_str() + marker + std::string_view("?skinnedmesh=").size(), nullptr, 10));
+
+		const LoadedSkinnedModel* model = LoadSkinnedModelFor(handle, *meta);
+		if (!model || submeshIndex >= model->Submeshes.size())
+		{
+			return nullptr;
+		}
+		const SkinnedSubmesh& submesh = model->Submeshes[submeshIndex];
+		if (submesh.Mesh.Vertices.empty())
+		{
+			return nullptr;
+		}
+
+		SkinnedMeshGpu gpu;
+		gpu.VertexCount = static_cast<uint32_t>(submesh.Mesh.Vertices.size());
+		gpu.BindPose = CreateRef<Mesh>(submesh.Mesh.Vertices, submesh.Mesh.Indices);
+		gpu.Skin = Buffer::Create(sizeof(SkinnedVertexWeights) * submesh.Skin.size(), BufferUsage::Storage,
+		                          submesh.Skin.data(), false, "SkinBinding");
+		return &(m_SkinnedMeshCache[handle] = std::move(gpu));
+	}
+
+	const SkinnedSubmesh* AssetManagerSingleton::GetSkinnedSubmeshCpu(const AssetHandle handle)
+	{
+		const AssetMetadata* meta = handle == 0 ? nullptr : GetMetadata(handle);
+		if (!meta)
+		{
+			return nullptr;
+		}
+		const std::string path = meta->Path.generic_string();
+		const size_t marker = path.find("?skinnedmesh=");
+		if (marker == std::string::npos)
+		{
+			return nullptr;
+		}
+		const auto submeshIndex = static_cast<size_t>(
+		    std::strtoul(path.c_str() + marker + std::string_view("?skinnedmesh=").size(), nullptr, 10));
+
+		const LoadedSkinnedModel* model = LoadSkinnedModelFor(handle, *meta);
+		return model && submeshIndex < model->Submeshes.size() ? &model->Submeshes[submeshIndex] : nullptr;
+	}
+
 	Ref<Mesh> AssetManagerSingleton::GetMesh(const AssetHandle handle)
 	{
 		if (handle == 0)
@@ -411,6 +647,14 @@ namespace Snowstorm
 		if (const auto it = m_MeshCache.find(handle); it != m_MeshCache.end())
 		{
 			return it->second;
+		}
+
+		// A "skinnedmesh=N" handle names geometry that only the skinned importer can produce -- the static
+		// path would run PreTransformVertices, which bakes the node transforms into the vertices and drops
+		// the bones, i.e. exactly the wrong mesh. Route it before any of the static machinery runs.
+		if (const SkinnedMeshGpu* skinned = GetSkinnedMesh(handle))
+		{
+			return skinned->BindPose;
 		}
 
 		const AssetMetadata* meta = ResolveMetaOrWarn(handle, AssetType::Mesh, "mesh");
@@ -487,6 +731,13 @@ namespace Snowstorm
 		if (const auto it = m_MeshCache.find(handle); it != m_MeshCache.end())
 		{
 			return it->second;
+		}
+
+		// Skinned geometry loads synchronously: it is one parse shared by the skeleton and every clip of the
+		// model (already cached), so the async path would add a job to hand back something usually resident.
+		if (const SkinnedMeshGpu* skinned = GetSkinnedMesh(handle))
+		{
+			return skinned->BindPose;
 		}
 
 		// Already being loaded -> nothing to do, caller retries next frame.

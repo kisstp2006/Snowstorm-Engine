@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include "Snowstorm/ECS/Singleton.hpp"
+#include "Snowstorm/Animation/SkinnedMeshImporter.hpp"
 #include "Snowstorm/Assets/AssetRegistry.hpp"
 #include "Snowstorm/Assets/MaterialAsset.hpp"
 
@@ -69,6 +70,31 @@ namespace Snowstorm
 		// to the model (DefaultLit; diffuse color + diffuse texture from the aiMaterial when present).
 		// Returns the created entities (empty on failure). Does NOT save the registry — caller decides.
 		std::vector<Entity> ImportModel(const std::filesystem::path& path);
+
+		// The skeleton / animation clip behind a sub-asset handle ("model.gltf?skeleton",
+		// "model.gltf?animation=Walk"). Both come out of ONE parse of the source file, cached per file:
+		// a character with five clips would otherwise re-read the whole model five times.
+		//
+		// No on-disk cook cache yet (the mesh/texture caches have one) -- the parse happens once per file
+		// per session, and AnimationClip/Skeleton are the shape a .ssanim blob would hold anyway.
+		Ref<Skeleton> GetSkeleton(AssetHandle handle);
+		Ref<AnimationClip> GetAnimation(AssetHandle handle);
+
+		// The bind-pose geometry and per-vertex skin binding behind a "model.gltf?skinnedmesh=N" handle.
+		// Both live for as long as the model is loaded and are SHARED by every entity using this mesh --
+		// what is per entity is the skinning OUTPUT, not its input. Null vertex count means "not a skinned
+		// mesh handle" (or the source stopped being one).
+		struct SkinnedMeshGpu
+		{
+			Ref<Mesh> BindPose;   // vertex buffer = the un-posed vertices the skinning pass reads
+			Ref<Buffer> Skin;     // SkinnedVertexWeights per vertex, as a storage buffer
+			uint32_t VertexCount = 0;
+		};
+		const SkinnedMeshGpu* GetSkinnedMesh(AssetHandle handle);
+
+		// The CPU-side bind pose + skin bindings behind the same handle. Only the skinning self-test needs
+		// them (to predict what the GPU should produce); the render path lives entirely on the GPU copies.
+		const SkinnedSubmesh* GetSkinnedSubmeshCpu(AssetHandle handle);
 
 		Ref<Mesh> GetMesh(AssetHandle handle);
 
@@ -156,6 +182,22 @@ namespace Snowstorm
 		WorldRef m_World;
 
 		std::unordered_map<uint64_t, Ref<Mesh>> m_MeshCache;
+
+		// One parsed skinned model per SOURCE FILE (key = resolved path), plus the per-handle views into
+		// it. The parse is the expensive part; the maps below just hand out what it produced.
+		struct LoadedSkinnedModel
+		{
+			Ref<Skeleton> Bones;
+			std::unordered_map<std::string, Ref<AnimationClip>> ClipsByName;
+			std::vector<SkinnedSubmesh> Submeshes; // CPU side; the GPU buffers are built on first use
+		};
+		std::unordered_map<std::string, LoadedSkinnedModel> m_SkinnedModelCache;
+		std::unordered_map<uint64_t, Ref<Skeleton>> m_SkeletonCache;
+		std::unordered_map<uint64_t, Ref<AnimationClip>> m_AnimationCache;
+		std::unordered_map<uint64_t, SkinnedMeshGpu> m_SkinnedMeshCache;
+
+		// Parses the source behind `handle` once and caches it. Null when it isn't a skinned model.
+		const LoadedSkinnedModel* LoadSkinnedModelFor(AssetHandle handle, const AssetMetadata& meta);
 		std::unordered_map<uint64_t, Ref<Shader>> m_ShaderCache;
 		// Keyed by (handle, srgb): a texture can be sampled both as sRGB (albedo) and linear (data).
 		std::unordered_map<uint64_t, Ref<TextureView>> m_TextureViewCache;       // srgb views

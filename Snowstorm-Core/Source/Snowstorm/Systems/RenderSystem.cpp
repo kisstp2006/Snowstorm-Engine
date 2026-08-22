@@ -1,5 +1,11 @@
 #include "RenderSystem.hpp"
 
+#include "Snowstorm/Render/Passes/SkinningSelfTest.hpp"
+#include "Snowstorm/Render/AccelerationStructure.hpp"
+#include "Snowstorm/Systems/SceneAccelerationSingleton.hpp"
+#include "Snowstorm/Systems/SkinnedMeshResolveSystem.hpp"
+#include "Snowstorm/Components/AnimationComponents.hpp"
+
 #include "Snowstorm/Components/CameraComponent.hpp"
 #include "Snowstorm/Components/CameraRuntimeComponent.hpp"
 #include "Snowstorm/Components/CameraTargetComponent.hpp"
@@ -54,6 +60,110 @@ namespace Snowstorm
 			pick.Visibility = &reg.Read<CameraVisibilityComponent>(e);
 			return pick;
 		}
+	}
+
+	void RenderSystem::RecordSkinning(FrameContext& fc) const
+	{
+		auto& reg = m_World->GetRegistry();
+
+		// Gather first: the graph pass runs later, and capturing the registry view would mean iterating it
+		// from inside the command recording. A vector of plain refs is also what makes the pass a no-op
+		// (and free) in the overwhelmingly common case of a scene with no skinned meshes.
+		struct SkinJob
+		{
+			Ref<Buffer> BindPose;
+			Ref<Buffer> Skin;
+			Ref<Buffer> Bones;
+			Ref<Buffer> Output;
+			uint32_t VertexCount;
+			uint32_t BoneCount;
+		};
+		std::vector<SkinJob> jobs;
+		Ref<Buffer> verifyOutput;
+		const SkinnedSubmesh* verifyCpu = nullptr;
+		const std::vector<glm::mat4>* verifyMatrices = nullptr;
+		for (const auto view = reg.view<SkinnedMeshRuntimeComponent, AnimationRuntimeComponent>();
+		     const entt::entity e : view)
+		{
+			const auto& skinned = reg.Read<SkinnedMeshRuntimeComponent>(e);
+			const auto boneCount = static_cast<uint32_t>(reg.Read<AnimationRuntimeComponent>(e).SkinningMatrices.size());
+			if (!skinned.Skinned || !skinned.BindPose || !skinned.SkinBinding || !skinned.BoneMatrices || boneCount == 0)
+			{
+				continue;
+			}
+			jobs.push_back({skinned.BindPose->GetVertexBuffer(), skinned.SkinBinding, skinned.BoneMatrices,
+			                skinned.Skinned->GetVertexBuffer(), skinned.VertexCount, boneCount});
+
+			// anim.skin_verify: check the FIRST live skinned entity against the CPU reference, once. The
+			// synthetic self-test proves the shader; this proves that a real entity ends up with the right
+			// buffers bound to it.
+			if (m_SkinningSelfTest.WantsEntityVerification())
+			{
+				auto& assets = m_World->GetSingleton<AssetManagerSingleton>();
+				if (const SkinnedSubmesh* cpu = assets.GetSkinnedSubmeshCpu(reg.Read<MeshComponent>(e).Mesh))
+				{
+					verifyOutput = skinned.Skinned->GetVertexBuffer();
+					verifyCpu = cpu;
+					verifyMatrices = &reg.Read<AnimationRuntimeComponent>(e).SkinningMatrices;
+				}
+			}
+		}
+		if (jobs.empty())
+		{
+			return;
+		}
+
+		const uint32_t frameIndex = fc.FrameIndex;
+		fc.Graph.AddPass({.Name = "Skinning",
+		                  .IsCompute = true,
+		                  .Execute = [this, jobs = std::move(jobs), frameIndex](CommandContext& c)
+		                  {
+			                  const Ref<CommandContext> ctx = Renderer::GetGraphicsCommandContext();
+			                  for (const SkinJob& job : jobs)
+			                  {
+				                  m_SkinningPass.Dispatch(ctx, frameIndex, job.BindPose, job.Skin, job.Bones,
+				                                          job.Output, job.VertexCount, job.BoneCount);
+			                  }
+			                  // One barrier for the whole batch: the dispatches are independent of each
+			                  // other, and what has to wait is everything that draws or traces afterwards.
+			                  c.BarrierComputeToVertexRead();
+		                  }});
+
+		if (verifyOutput && verifyCpu && verifyMatrices)
+		{
+			m_SkinningSelfTest.VerifyEntity(fc.Graph, verifyOutput, verifyCpu->Mesh.Vertices, verifyCpu->Skin,
+			                                *verifyMatrices);
+		}
+	}
+
+	void RenderSystem::RecordAccelerationStructures(FrameContext& fc) const
+	{
+		auto& accel = m_World->GetSingleton<SceneAccelerationSingleton>();
+		if (!accel.BuildPending || !accel.Tlas)
+		{
+			return;
+		}
+
+		fc.Graph.AddPass({.Name = "AccelerationStructures",
+		                  .IsCompute = true,
+		                  .Execute = [&accel](CommandContext& c)
+		                  {
+			                  // Wait for anything still traversing the structures (a previous frame's ray
+			                  // queries) before overwriting them. A barrier's first scope covers earlier
+			                  // submissions on the same queue, which is what makes rebuilding the one TLAS
+			                  // in place safe without a device-wide wait.
+			                  c.BarrierAccelerationStructureBuild();
+			                  for (const Ref<Mesh>& mesh : accel.DeformableMeshes)
+			                  {
+				                  mesh->RecordBlasRefit(c);
+			                  }
+			                  if (!accel.DeformableMeshes.empty())
+			                  {
+				                  c.BarrierAccelerationStructureBuild(); // BLAS writes -> TLAS build reads
+			                  }
+			                  accel.Tlas->RecordBuild(c);
+			                  c.BarrierAccelerationStructureRead(); // build -> the frame's ray queries
+		                  }});
 	}
 
 	void RenderSystem::Execute(const Timestep /*ts*/)
@@ -135,6 +245,26 @@ namespace Snowstorm
 		// PreRender) to the renderer so AcquireFrameSet folds it into FrameCB. 0 when reflections are off ->
 		// the shader's reflection trace falls back to the sky cube.
 		renderer.SetReflectionGeometryAddress(SingletonView<ReflectionGeometrySingleton>().TableAddress);
+
+		// GPU skinning self-test (anim.skin_verify): a one-shot dispatch + readback that compares the
+		// skinning shader against the CPU reference. Before anything else that could fail, so its verdict
+		// isn't buried under an unrelated error.
+		// One reset per FRAME, before any recorder queues a dispatch: the skinning pass hands out a
+		// descriptor set per dispatch from a per-frame cursor, and every dispatch this frame -- self-test
+		// and real entities alike -- has to draw from the same run of slots.
+		m_SkinningPass.BeginFrame(frameIndex);
+		m_SkinningSelfTest.Update(graph, m_SkinningPass, ctx, frameIndex);
+		m_SkinningSelfTest.PumpEntity();
+
+		// GPU skin cache. Must run before ANY pass that reads a vertex buffer -- shadows draw the same
+		// meshes, and the TLAS build reads their vertices -- so it is the first real pass of the frame.
+		RecordSkinning(fc);
+
+		// Then the acceleration structures, in the only order that is correct: the skinning above has
+		// rewritten the vertices, each deformable BLAS is re-fitted from them, and the TLAS is built over
+		// the result (its tree is built from the instances' bounds, so it has to come last). All three in
+		// this frame's command buffer, so the ray queries later in the frame see THIS frame's pose.
+		RecordAccelerationStructures(fc);
 
 		const EnvironmentDataBlock& env = renderer.GetEnvironment();
 		SetupIBL(fc, env);

@@ -52,13 +52,13 @@ namespace Snowstorm
 
 	Ref<BLAS> BLAS::Create(const Ref<Buffer>& vertexBuffer, const uint32_t vertexCount, const uint32_t vertexStride,
 	                       const uint32_t positionOffset, const Ref<Buffer>& indexBuffer, const uint32_t indexCount,
-	                       const std::string& debugName, const Ref<Micromap>& micromap)
+	                       const std::string& debugName, const Ref<Micromap>& micromap, const bool allowUpdate)
 	{
 		switch (RendererAPI::GetAPI())
 		{
 		case RendererAPI::API::Vulkan:
 			return CreateRef<VulkanBlas>(vertexBuffer, vertexCount, vertexStride, positionOffset, indexBuffer,
-			                             indexCount, debugName, micromap);
+			                             indexCount, debugName, micromap, allowUpdate);
 
 		case RendererAPI::API::None:
 		case RendererAPI::API::OpenGL:

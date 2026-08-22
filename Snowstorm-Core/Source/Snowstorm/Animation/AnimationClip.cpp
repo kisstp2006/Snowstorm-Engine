@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace Snowstorm
 {
@@ -174,5 +175,27 @@ namespace Snowstorm
 		{
 			outMatrices[bone] = outMatrices[bone] * skeleton.GetInverseBindMatrix(bone);
 		}
+	}
+
+	MeshBounds ComputeSkinnedBounds(const MeshBounds& bindPose, const std::vector<glm::mat4>& skinningMatrices)
+	{
+		if (skinningMatrices.empty())
+		{
+			return bindPose;
+		}
+
+		AABB box{glm::vec3(std::numeric_limits<float>::max()), glm::vec3(std::numeric_limits<float>::lowest())};
+		for (const glm::mat4& matrix : skinningMatrices)
+		{
+			const AABB posed = TransformAABB(bindPose.Box, matrix);
+			box.Min = glm::min(box.Min, posed.Min);
+			box.Max = glm::max(box.Max, posed.Max);
+		}
+
+		MeshBounds out;
+		out.Box = box;
+		out.Sphere.Center = box.Center();
+		out.Sphere.Radius = glm::length(box.Extents());
+		return out;
 	}
 }

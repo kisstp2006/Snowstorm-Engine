@@ -13,7 +13,13 @@ namespace Snowstorm
 		switch (usage)
 		{
 		case BufferUsage::Vertex:
-			usageFlags |= VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+			// STORAGE too: the skinning compute pass READS bind-pose vertices out of an ordinary mesh
+			// buffer. An extra usage flag costs nothing but a slightly wider memory-type choice, and the
+			// alternative -- a second, duplicate copy of every skinned mesh -- costs the whole mesh.
+			usageFlags |= VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+			break;
+		case BufferUsage::SkinnedVertex:
+			usageFlags |= VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
 			break;
 		case BufferUsage::Index:
 			usageFlags |= VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
@@ -52,7 +58,8 @@ namespace Snowstorm
 		// pays for it. The AS's own backing/scratch/instance buffers are created directly in the Vulkan RHI
 		// (VulkanBlas/VulkanTlas), not through this backend-agnostic Buffer, so no new BufferUsage value is
 		// needed here.
-		if ((usage == BufferUsage::Vertex || usage == BufferUsage::Index) && GetVulkanContext().SupportsRayTracing())
+		if ((usage == BufferUsage::Vertex || usage == BufferUsage::Index || usage == BufferUsage::SkinnedVertex) &&
+		    GetVulkanContext().SupportsRayTracing())
 		{
 			usageFlags |= VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
 		}

@@ -224,3 +224,60 @@ TEST_CASE("A clip binds to a skeleton by bone NAME, so it is an asset in its own
 	clip.Sample(0.5f, false, reordered, reorderedMapping, pose);
 	REQUIRE(NearlyEqual(pose.BoneTransforms[childIndex].Translation, {0.0f, 4.0f, 0.0f}));
 }
+
+TEST_CASE("Posed bounds contain the skinned mesh, and never shrink below it", "[animation]")
+{
+	const Skeleton skeleton = MakeTwoBoneSkeleton();
+
+	MeshBounds bind;
+	bind.Box = {glm::vec3(-1.0f, 0.0f, -1.0f), glm::vec3(1.0f, 4.0f, 1.0f)};
+	bind.Sphere = {bind.Box.Center(), glm::length(bind.Box.Extents())};
+
+	SECTION("The rest pose reproduces the bind bounds")
+	{
+		Pose pose;
+		pose.BoneTransforms = skeleton.GetRestPose();
+		std::vector<glm::mat4> skinning;
+		ComputeSkinningMatrices(skeleton, pose, skinning);
+
+		const MeshBounds posed = ComputeSkinnedBounds(bind, skinning);
+		REQUIRE(NearlyEqual(posed.Box.Min, bind.Box.Min));
+		REQUIRE(NearlyEqual(posed.Box.Max, bind.Box.Max));
+	}
+
+	SECTION("A rotated pose grows the box to cover where the mesh actually went")
+	{
+		Pose pose;
+		pose.BoneTransforms = skeleton.GetRestPose();
+		pose.BoneTransforms[0].Rotation = glm::angleAxis(glm::half_pi<float>(), glm::vec3(0.0f, 0.0f, 1.0f));
+		std::vector<glm::mat4> skinning;
+		ComputeSkinningMatrices(skeleton, pose, skinning);
+
+		const MeshBounds posed = ComputeSkinnedBounds(bind, skinning);
+
+		// Rotating +Y into -X puts geometry out at x = -4, which the bind box (x >= -1) does not contain.
+		REQUIRE(posed.Box.Min.x <= -4.0f + 1e-3f);
+
+		// And it must still contain every skinned vertex: check the corners of the bind box through each
+		// bone, which is what the mesh's extremes can reach.
+		for (const glm::mat4& matrix : skinning)
+		{
+			for (int corner = 0; corner < 8; ++corner)
+			{
+				const glm::vec3 point{(corner & 1) ? bind.Box.Max.x : bind.Box.Min.x,
+				                      (corner & 2) ? bind.Box.Max.y : bind.Box.Min.y,
+				                      (corner & 4) ? bind.Box.Max.z : bind.Box.Min.z};
+				const glm::vec3 skinned = glm::vec3(matrix * glm::vec4(point, 1.0f));
+				REQUIRE(glm::all(glm::greaterThanEqual(skinned, posed.Box.Min - glm::vec3(1e-4f))));
+				REQUIRE(glm::all(glm::lessThanEqual(skinned, posed.Box.Max + glm::vec3(1e-4f))));
+			}
+		}
+	}
+
+	SECTION("No matrices at all falls back to the bind bounds rather than an empty box")
+	{
+		const MeshBounds posed = ComputeSkinnedBounds(bind, {});
+		REQUIRE(NearlyEqual(posed.Box.Min, bind.Box.Min));
+		REQUIRE(NearlyEqual(posed.Box.Max, bind.Box.Max));
+	}
+}

@@ -1,5 +1,7 @@
 #include "TlasBuildSystem.hpp"
 
+#include "Snowstorm/Systems/SceneAccelerationSingleton.hpp"
+
 #include "Snowstorm/Assets/AssetManagerSingleton.hpp"
 #include "Snowstorm/Components/MaterialComponent.hpp"
 #include "Snowstorm/Components/MeshComponent.hpp"
@@ -72,6 +74,10 @@ namespace Snowstorm
 
 	void TlasBuildSystem::Execute(Timestep)
 	{
+		auto& accel = SingletonView<SceneAccelerationSingleton>();
+		accel.BuildPending = false;
+		accel.DeformableMeshes.clear();
+
 		// Only maintain the TLAS + its per-instance geometry table while some RT effect actually samples them;
 		// in every other mode building them is pure waste. Each helper folds in the device-support check
 		// (false on a non-RT GPU). Track the state so the OFF->ON transition can force a rebuild below.
@@ -179,6 +185,19 @@ namespace Snowstorm
 				continue;
 			}
 
+			// A skinned mesh's vertices were rewritten by the GPU skin cache; without re-fitting its BLAS the
+			// ray queries would traverse whatever pose the tree was first built for -- RT shadows, GI and
+			// reflections frozen in the bind pose while the raster image animates.
+			//
+			// A skinned mesh's BLAS has to be re-fitted from this frame's skinned vertices, and the TLAS
+			// built after that (its tree is built over the instances' bounds, so a BLAS that changes
+			// afterwards leaves them stale). Both are GPU work that belongs in the frame's command buffer,
+			// after the skinning dispatch -- collect the mesh here and let RenderSystem record it.
+			if (mc.Instance->IsDeformable())
+			{
+				accel.DeformableMeshes.push_back(mc.Instance);
+			}
+
 			const glm::mat4 model = reg.Read<WorldTransformComponent>(e).LocalToWorld;
 			instances.push_back({model, blas->GetDeviceAddress()});
 			instanceEntities.push_back(e);
@@ -261,12 +280,22 @@ namespace Snowstorm
 		{
 			m_TLAS = TLAS::Create("SceneTLAS");
 		}
-		m_TLAS->Build(instances);
-		m_BuiltOnce = true;
 
-		// Point the bindless TLAS slot at the freshly built AS so ray-query shaders trace this scene.
-		const auto vkTlas = std::static_pointer_cast<VulkanTlas>(m_TLAS);
-		VulkanBindlessManager::Get().WriteAccelerationStructure(vkTlas->GetHandle());
+		// CPU half only: fill the instance array and size the AS. The build itself is recorded by
+		// RenderSystem into the frame's command buffer (see SceneAccelerationSingleton).
+		const bool recreated = m_TLAS->Prepare(instances);
+		m_BuiltOnce = true;
+		accel.Tlas = m_TLAS;
+		accel.BuildPending = true;
+
+		// The bindless TLAS slot is a SINGLE global descriptor, so it is written only when the acceleration
+		// structure object actually changes -- rewriting it every frame would repoint a descriptor that
+		// earlier, still-in-flight frames are tracing through. The AS is reused in place otherwise.
+		if (recreated)
+		{
+			const auto vkTlas = std::static_pointer_cast<VulkanTlas>(m_TLAS);
+			VulkanBindlessManager::Get().WriteAccelerationStructure(vkTlas->GetHandle());
+		}
 
 		// Log only when the instance count changes (streaming settle, scene switch) — not every transform
 		// tweak — so dragging an object in the editor (a rebuild per frame) doesn't spam the log.

@@ -12,6 +12,7 @@
 #include "Snowstorm/Render/Shader.hpp"
 #include "Snowstorm/Scripting/ScriptEvents.hpp"
 #include "Snowstorm/Service/ServiceManager.hpp"
+#include "Snowstorm/Systems/AnimationSystem.hpp"
 #include "Snowstorm/Systems/AssetLoadSystem.hpp"
 #include "Snowstorm/Systems/AssetWatchSystem.hpp"
 #include "Snowstorm/Systems/CameraControllerSystem.hpp"
@@ -20,6 +21,7 @@
 #include "Snowstorm/Systems/CameraRuntimeUpdateSystem.hpp"
 #include "Snowstorm/Systems/MaterialResolveSystem.hpp"
 #include "Snowstorm/Systems/MeshResolveSystem.hpp"
+#include "Snowstorm/Systems/SkinnedMeshResolveSystem.hpp"
 #include "Snowstorm/Systems/PrevTransformSnapshotSystem.hpp"
 #include "Snowstorm/Systems/PrimaryCameraSystem.hpp"
 #include "Snowstorm/Systems/RenderSystem.hpp"
@@ -61,6 +63,7 @@ namespace Snowstorm
 		sm.RegisterSystem<CameraControllerSystem>(SystemPhase::Logic);
 		sm.RegisterSystem<CameraPathSystem>(SystemPhase::Logic);
 		sm.RegisterSystem<RotatorSystem>(SystemPhase::Logic);
+		sm.RegisterSystem<AnimationSystem>(SystemPhase::Logic);
 
 		sm.RegisterSystem<ScriptFixedSystem>(SystemPhase::FixedUpdate); // OnFixedUpdate before the physics step
 
@@ -71,6 +74,9 @@ namespace Snowstorm
 		sm.RegisterSystem<TransformSystem>(SystemPhase::Resolve); // world matrices first: everything below reads them
 		sm.RegisterSystem<CameraRuntimeUpdateSystem>(SystemPhase::Resolve);
 		sm.RegisterSystem<MeshResolveSystem>(SystemPhase::Resolve);
+		// After MeshResolveSystem (+10): it overwrites the resolved mesh with this entity's SKINNED copy,
+		// so it has to see the resolve that produced the bind pose first.
+		sm.RegisterSystemOrdered<SkinnedMeshResolveSystem>(SystemPhase::Resolve, 10);
 		sm.RegisterSystem<MaterialResolveSystem>(SystemPhase::Resolve);
 
 		sm.RegisterSystem<EnvironmentSystem>(SystemPhase::PreRender);

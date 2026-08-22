@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Snowstorm/Render/Passes/SkinningSelfTest.hpp"
+
 #include "Snowstorm/ECS/System.hpp"
 #include "Snowstorm/Lighting/LightingUniforms.hpp"
 // Only the passes RenderSystem itself owns as members are included here (IBL bake + the shared Sky /
@@ -90,6 +92,17 @@ namespace Snowstorm
 		                                                const MeshRuntimeComponent&, const MaterialRuntimeComponent&)>& draw);
 
 	private:
+		// GPU skin cache + its headless self-test (anim.skin_verify). The pass is here rather than in
+		// ViewportEffects because skinning is per SCENE, not per viewport: two viewports of the same world
+		// must not skin the same character twice.
+		// Dispatches the GPU skin cache for every animated entity, before anything reads a vertex buffer.
+		void RecordSkinning(FrameContext& fc) const;
+
+		// Records the BLAS refits and the TLAS build, after skinning and before anything traces.
+		void RecordAccelerationStructures(FrameContext& fc) const;
+
+		mutable SkinningPass m_SkinningPass;
+		mutable SkinningSelfTest m_SkinningSelfTest;
 		// Frame-global IBL bake phase (appended once per frame before the per-viewport loop; the baked maps
 		// are read by every forward pass). Split out of Execute so the top-level frame assembly reads as a
 		// sequence of named phases (cf. Unreal's FSceneRenderer delegating to RenderBasePass/...). Shadows are

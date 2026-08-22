@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Snowstorm/Animation/Skeleton.hpp"
+#include "Snowstorm/Math/Bounds.hpp"
 
 #include <glm/gtc/quaternion.hpp>
 #include <glm/mat4x4.hpp>
@@ -95,4 +96,16 @@ namespace Snowstorm
 	// Model-space transform per bone (pose composed down the hierarchy), without the inverse bind. Useful
 	// on its own for attaching entities to bones and for debug-drawing a skeleton.
 	void ComputeModelSpaceTransforms(const Skeleton& skeleton, const Pose& pose, std::vector<glm::mat4>& outMatrices);
+
+	// Bounds for a POSED mesh, from its bind-pose bounds and this frame's skinning matrices.
+	//
+	// Conservative by construction: every skinned vertex is a convex combination of that vertex transformed
+	// by each of its bones, so the union of the per-bone transformed boxes always contains the result. It
+	// can be bigger than the true bounds -- never smaller, which is the safe direction: too-small bounds
+	// cull a character that is still on screen, or clip it out of the shadow map. O(bones) per frame, which
+	// is nothing next to the skinning itself.
+	//
+	// Without this a skinned mesh keeps its BIND-POSE bounds, and any clip that swings a limb outside them
+	// pops in and out of view.
+	[[nodiscard]] MeshBounds ComputeSkinnedBounds(const MeshBounds& bindPose, const std::vector<glm::mat4>& skinningMatrices);
 }

@@ -1,5 +1,7 @@
 #include "VulkanBlas.hpp"
 
+#include "VulkanCommandContext.hpp"
+
 #include "VulkanBuffer.hpp"
 #include "VulkanMicromap.hpp"
 #include "Snowstorm/Core/Base.hpp"
@@ -61,7 +63,7 @@ namespace Snowstorm
 
 	VulkanBlas::VulkanBlas(const Ref<Buffer>& vertexBuffer, const uint32_t vertexCount, const uint32_t vertexStride,
 	                       const uint32_t positionOffset, const Ref<Buffer>& indexBuffer, const uint32_t indexCount,
-	                       const std::string& debugName, const Ref<Micromap>& micromap)
+	                       const std::string& debugName, const Ref<Micromap>& micromap, const bool allowUpdate)
 	{
 		const VkDevice device = GetVulkanDevice();
 
@@ -142,6 +144,11 @@ namespace Snowstorm
 		    VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
 		buildInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
 		buildInfo.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+		if (allowUpdate)
+		{
+			// Must be present on the ORIGINAL build: an AS cannot be made updatable after the fact.
+			buildInfo.flags |= VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
+		}
 		buildInfo.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
 		buildInfo.geometryCount = 1;
 		buildInfo.pGeometries = &geometry;
@@ -187,6 +194,19 @@ namespace Snowstorm
 		ImmediateSubmit([&](const VkCommandBuffer cmd)
 		                { vkCmdBuildAccelerationStructuresKHR(cmd, 1, &buildInfo, &pRange); });
 
+		// An updatable BLAS keeps its own scratch: a refit runs every frame, and allocating (and fencing)
+		// a scratch buffer per frame per character would cost more than the refit itself. updateScratchSize
+		// is normally much smaller than the build scratch, so this is its own allocation, not the build's.
+		if (allowUpdate)
+		{
+			CreateAsBuffer(sizeInfo.updateScratchSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+			               asProps.minAccelerationStructureScratchOffsetAlignment, m_UpdateScratch,
+			               m_UpdateScratchAllocation, "BLAS_UpdateScratch");
+			m_UpdateScratchAddress = RawBufferAddress(m_UpdateScratch);
+			m_Geometry = geometry;
+			m_TriangleCount = triangleCount;
+		}
+
 		vmaDestroyBuffer(GetAllocator(), scratchBuffer, scratchAllocation);
 		if (ommIndexBuffer != VK_NULL_HANDLE)
 		{
@@ -206,9 +226,47 @@ namespace Snowstorm
 		}
 	}
 
+	void VulkanBlas::RecordRefit(CommandContext& ctx)
+	{
+		if (m_UpdateScratch == VK_NULL_HANDLE)
+		{
+			return; // static BLAS: nothing to update (and updating one would be invalid)
+		}
+
+		// An in-place update: src == dst. The buffers are the same objects the build used -- only their
+		// CONTENTS changed (the skinning pass rewrote the vertices), which is exactly the case an AS update
+		// is for.
+		VkAccelerationStructureBuildGeometryInfoKHR buildInfo{
+		    VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
+		buildInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+		buildInfo.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
+		                  VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
+		buildInfo.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR;
+		buildInfo.srcAccelerationStructure = m_AccelStruct;
+		buildInfo.dstAccelerationStructure = m_AccelStruct;
+		buildInfo.geometryCount = 1;
+		buildInfo.pGeometries = &m_Geometry;
+		buildInfo.scratchData.deviceAddress = m_UpdateScratchAddress;
+
+		VkAccelerationStructureBuildRangeInfoKHR rangeInfo{};
+		rangeInfo.primitiveCount = m_TriangleCount;
+		const VkAccelerationStructureBuildRangeInfoKHR* pRange = &rangeInfo;
+
+		// Recorded into the FRAME's command buffer, not an immediate submit: a refit has to land after this
+		// frame's skinning dispatch (which is in that same buffer) and before the TLAS build that follows it.
+		// An immediate submit would run before the whole frame instead, and stall on a fence per character.
+		vkCmdBuildAccelerationStructuresKHR(static_cast<VulkanCommandContext&>(ctx).GetCommandBuffer(), 1,
+		                                    &buildInfo, &pRange);
+	}
+
 	VulkanBlas::~VulkanBlas()
 	{
 		vkDeviceWaitIdle(GetVulkanDevice());
+		if (m_UpdateScratch != VK_NULL_HANDLE)
+		{
+			vmaDestroyBuffer(GetAllocator(), m_UpdateScratch, m_UpdateScratchAllocation);
+			m_UpdateScratch = VK_NULL_HANDLE;
+		}
 		if (m_AccelStruct != VK_NULL_HANDLE)
 		{
 			vkDestroyAccelerationStructureKHR(GetVulkanDevice(), m_AccelStruct, nullptr);

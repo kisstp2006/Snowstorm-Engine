@@ -98,6 +98,30 @@ namespace Snowstorm
 		// so the read sees the completed write. Covers all storage buffers/images touched by compute.
 		virtual void BarrierComputeStorage() = 0;
 
+		// Compute-write -> vertex-input/index read. The GPU skin cache writes a VERTEX buffer from compute
+		// and the very next passes draw from it; BarrierComputeStorage above only covers compute->compute,
+		// so without this the vertex fetcher can read half-written vertices. Also covers the
+		// acceleration-structure build, which reads the same buffer when a BLAS is refit from it.
+		virtual void BarrierComputeToVertexRead() = 0;
+
+		// Ordering for acceleration-structure builds recorded into the frame's command buffer.
+		//
+		// The first scope of a pipeline barrier covers everything submitted EARLIER TO THE SAME QUEUE, so
+		// this also orders against previous frames' traversals -- which is what lets the scene TLAS be
+		// rebuilt in place, frame after frame, without a device-wide wait and without N copies of the
+		// bindless descriptor that points at it.
+		virtual void BarrierAccelerationStructureBuild() = 0; // prior AS reads/writes -> this build
+		virtual void BarrierAccelerationStructureRead() = 0;  // this build -> ray queries that traverse it
+
+		// GPU->GPU (or GPU->readback) buffer copy. The source is made visible to the transfer stage first,
+		// covering the common "a compute pass just wrote this and now we want to read it" case -- a plain
+		// vkCmdCopyBuffer would race those writes. Sizes are in bytes; `size` 0 copies the whole source.
+		//
+		// Pair it with a BufferUsage::Readback destination for a CPU read: that usage is the one allocated
+		// for RANDOM host access, so reading it back isn't a crawl over write-combined memory. Map() the
+		// destination only after the submit's fence has retired (a frame later), or the read races the GPU.
+		virtual void CopyBuffer(const Ref<Buffer>& src, const Ref<Buffer>& dst, uint64_t size = 0) = 0;
+
 		// GPU->CPU readback: copy ONE subresource (mipLevel, arrayLayer) of a texture into a host-visible buffer
 		// (created with BufferUsage::Readback). Defaults (0, 0) = the base mip of layer 0, the common 2D case.
 		// Transitions the image SHADER_READ_ONLY -> TRANSFER_SRC, does a tightly-packed vkCmdCopyImageToBuffer

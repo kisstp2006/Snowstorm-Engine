@@ -172,6 +172,8 @@ namespace Snowstorm::CVars
 
 	CVar<bool> ShadowImportanceSpecular{"render.shadows.importance.specular", true, "Stochastic RT shadow reservoir target: ON = combined diffuse+specular importance (boost each light's diffuse-luma weight by its capped specular response, so the SAME reservoir also samples the specular-dominant light well -> lower specular-visibility noise on glossy/rough surfaces). OFF = diffuse-only importance (specular visibility reuses the diffuse selection, unbiased but noisier where the specular-dominant light has low diffuse weight). Used identically in the reservoir AND the RIS normalization so the estimate stays unbiased; the specular boost is capped so a near-mirror light can't starve diffuse.", CVarFlags::Persist};
 
+	CVar<bool> SkinVerify{"anim.skin_verify", false, "One-shot GPU skinning self-test: dispatch the skinning compute shader over synthetic data with a known answer, read the result back and compare it against the CPU reference (ComputeSkinningMatrices). Logs [skin-verify] PASS/FAIL once, then stops. Skinning output never reaches a pixel directly, so this is the only way to catch a wrong skin without eyeballing an animation.", CVarFlags::ReadOnly};
+
 	CVar<bool> IBL{"render.ibl", true, "Bake + use image-based lighting from the sky (off = analytic hemisphere ambient)", CVarFlags::Persist};
 
 	CVar<float> IBLIntensity{"render.ibl.intensity", 0.75f, "Multiplier on the IBL ambient contribution", CVarFlags::Persist};

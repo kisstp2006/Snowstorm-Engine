@@ -16,7 +16,8 @@ namespace Snowstorm
 		explicit VulkanTlas(const std::string& debugName);
 		~VulkanTlas() override;
 
-		void Build(const std::vector<TLASInstance>& instances) override;
+		bool Prepare(const std::vector<TLASInstance>& instances) override;
+		void RecordBuild(CommandContext& ctx) override;
 
 		[[nodiscard]] uint32_t GetInstanceCount() const override { return m_InstanceCount; }
 
@@ -39,6 +40,13 @@ namespace Snowstorm
 		VkBuffer m_ScratchBuffer = VK_NULL_HANDLE; // build scratch
 		VmaAllocation m_ScratchAllocation = nullptr;
 		VkDeviceSize m_ScratchCapacity = 0;
+
+		VkDeviceSize m_AsCapacity = 0; // bytes the AS storage holds; the AS is only recreated when it grows
+
+		// Filled by Prepare, consumed by RecordBuild. Held as members because the build info points at the
+		// geometry struct, which must outlive the call that records it.
+		VkAccelerationStructureGeometryKHR m_Geometry{};
+		VkAccelerationStructureBuildGeometryInfoKHR m_BuildInfo{};
 
 		uint32_t m_InstanceCount = 0;
 	};

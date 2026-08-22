@@ -571,6 +571,98 @@ namespace Snowstorm
 		vkCmdPipelineBarrier2(m_CommandBuffer, &dep);
 	}
 
+	void VulkanCommandContext::BarrierComputeToVertexRead()
+	{
+		VkMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+		barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+		barrier.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+		// Vertex INPUT (the fixed-function fetcher) plus the AS build, which reads the same buffer when a
+		// skinned mesh's BLAS is refit from the skin cache's output.
+		barrier.dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT |
+		                       VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+		barrier.dstAccessMask = VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_2_INDEX_READ_BIT |
+		                        VK_ACCESS_2_SHADER_READ_BIT;
+
+		VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+		dependency.memoryBarrierCount = 1;
+		dependency.pMemoryBarriers = &barrier;
+		vkCmdPipelineBarrier2(m_CommandBuffer, &dependency);
+	}
+
+	void VulkanCommandContext::BarrierAccelerationStructureBuild()
+	{
+		VkMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+		// Everything that may still be reading the AS: ray queries live in whichever shader stage traces
+		// them (fragment for the inline path, compute for AO/GI/shadow/reflection), plus a previous frame's
+		// build. Both scopes name the build stage so back-to-back builds serialize on their scratch too.
+		barrier.srcStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
+		                       VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+		barrier.srcAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
+		                        VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+		barrier.dstStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+		barrier.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR |
+		                        VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK_ACCESS_2_SHADER_READ_BIT;
+
+		VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+		dependency.memoryBarrierCount = 1;
+		dependency.pMemoryBarriers = &barrier;
+		vkCmdPipelineBarrier2(m_CommandBuffer, &dependency);
+	}
+
+	void VulkanCommandContext::BarrierAccelerationStructureRead()
+	{
+		VkMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+		barrier.srcStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+		barrier.srcAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+		barrier.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+		                       VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+		barrier.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK_ACCESS_2_SHADER_READ_BIT;
+
+		VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+		dependency.memoryBarrierCount = 1;
+		dependency.pMemoryBarriers = &barrier;
+		vkCmdPipelineBarrier2(m_CommandBuffer, &dependency);
+	}
+
+	void VulkanCommandContext::CopyBuffer(const Ref<Buffer>& src, const Ref<Buffer>& dst, const uint64_t size)
+	{
+		SS_CORE_ASSERT(src && dst, "CopyBuffer: null buffer");
+		const VkDeviceSize bytes = size != 0 ? static_cast<VkDeviceSize>(size) : static_cast<VkDeviceSize>(src->GetSize());
+		SS_CORE_ASSERT(src->GetSize() >= bytes && dst->GetSize() >= bytes, "CopyBuffer: buffer too small");
+
+		// The source is typically a storage buffer a compute pass just wrote. vkCmdCopyBuffer alone would
+		// not wait for those writes, so make them visible to the transfer stage first. A global memory
+		// barrier keeps this correct for any producer (compute or transfer) without the caller having to
+		// say which one it was -- this is a copy, not a hot inner loop.
+		VkMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+		barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+		barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT;
+		barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+		barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
+
+		VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+		dependency.memoryBarrierCount = 1;
+		dependency.pMemoryBarriers = &barrier;
+		vkCmdPipelineBarrier2(m_CommandBuffer, &dependency);
+
+		VkBufferCopy region{};
+		region.srcOffset = 0;
+		region.dstOffset = 0;
+		region.size = bytes;
+		vkCmdCopyBuffer(m_CommandBuffer,
+		                std::static_pointer_cast<VulkanBuffer>(src)->GetHandle(),
+		                std::static_pointer_cast<VulkanBuffer>(dst)->GetHandle(), 1, &region);
+
+		// And make the copy visible to a host map (the destination is normally a Readback buffer).
+		VkMemoryBarrier2 toHost{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+		toHost.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+		toHost.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+		toHost.dstStageMask = VK_PIPELINE_STAGE_2_HOST_BIT;
+		toHost.dstAccessMask = VK_ACCESS_2_HOST_READ_BIT;
+		dependency.pMemoryBarriers = &toHost;
+		vkCmdPipelineBarrier2(m_CommandBuffer, &dependency);
+	}
+
 	void VulkanCommandContext::CopyTextureToBuffer(const Ref<Texture>& texture, const Ref<Buffer>& dst,
 	                                               const uint32_t mipLevel, const uint32_t arrayLayer)
 	{

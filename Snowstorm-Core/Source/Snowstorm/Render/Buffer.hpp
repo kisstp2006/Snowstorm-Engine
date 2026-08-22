@@ -14,6 +14,11 @@ namespace Snowstorm
 		Index,
 		Uniform,
 		Storage,
+		// A vertex buffer a compute pass WRITES: vertex + storage (+ acceleration-structure input on an RT
+		// device, like any vertex buffer). This is the GPU skin cache's output -- skinning has to land in a
+		// real buffer, not in the vertex shader, or the BLAS a ray query traverses would still hold the
+		// bind pose. Unreal requires its skin cache for ray-traced skeletal meshes for the same reason.
+		SkinnedVertex,
 		// GPU->CPU readback destination: host-visible, TRANSFER_DST (a vkCmdCopyImageToBuffer target), and
 		// allocated for RANDOM host access so reading it back is not on write-combined memory. Implies
 		// hostVisible; pass hostVisible=true at Create too (the flag is what the copy destination needs).

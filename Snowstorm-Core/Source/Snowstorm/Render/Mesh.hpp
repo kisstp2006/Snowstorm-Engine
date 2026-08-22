@@ -26,6 +26,17 @@ namespace Snowstorm
 	public:
 		Mesh(const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices);
 
+		// Adopt existing buffers instead of uploading data. Used by CreateSkinnedInstance below; kept
+		// general because "a Mesh is a vertex buffer + an index buffer + counts" is all the render path
+		// ever asks of it.
+		Mesh(Ref<Buffer> vertexBuffer, Ref<Buffer> indexBuffer, uint32_t vertexCount, uint32_t indexCount);
+
+		// A per-entity copy of `source` whose VERTEX buffer is writable by the skinning compute pass and
+		// whose INDEX buffer is shared with the source (topology doesn't change when a mesh deforms, and
+		// duplicating it per character would be pure waste). Bounds are copied from the source; they are
+		// the bind-pose bounds, so a wildly deforming mesh needs them refreshed -- see the .cpp.
+		[[nodiscard]] static Ref<Mesh> CreateSkinnedInstance(const Ref<Mesh>& source, const std::string& debugName);
+
 		[[nodiscard]] const Ref<Buffer>& GetVertexBuffer() const { return m_VertexBuffer; }
 		[[nodiscard]] const Ref<Buffer>& GetIndexBuffer() const { return m_IndexBuffer; }
 
@@ -39,6 +50,12 @@ namespace Snowstorm
 		// no RT support. Built from this mesh's own vertex/index buffers (Position at offset 0, stride
 		// sizeof(Vertex)); a TLAS instance references its device address. Callers gate on RT support.
 		[[nodiscard]] const Ref<BLAS>& GetOrBuildBLAS();
+
+		// True for a mesh whose vertices change every frame (a skinned instance): its BLAS is built
+		// updatable, and RefitBLAS() re-fits it in place once the skinning pass has rewritten the buffer.
+		// Set by CreateSkinnedInstance; a static mesh must NOT pay for it (memory + a little trace cost).
+		[[nodiscard]] bool IsDeformable() const { return m_Deformable; }
+		void RecordBlasRefit(CommandContext& ctx) const;
 
 		// Variant that builds (and caches) a BLAS carrying an opacity micromap for an alpha-cutout mesh on an
 		// OMM-capable device (#OMM). The micromap states are GPU-baked from the material's albedo alpha at the
@@ -56,6 +73,7 @@ namespace Snowstorm
 
 		MeshBounds m_Bounds{}; //-- bounds won't be set by default
 
+		bool m_Deformable = false; // vertices rewritten every frame -> updatable BLAS
 		Ref<BLAS> m_BLAS;    // lazily built on first GetOrBuildBLAS(); null until then / when RT unsupported
 		Ref<BLAS> m_OmmBlas; // OMM-carrying BLAS, lazily built on first GetOrBuildOmmBlas() (masked + OMM device)
 	};

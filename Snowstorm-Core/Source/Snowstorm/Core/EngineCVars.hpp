@@ -369,6 +369,10 @@ namespace Snowstorm::CVars
 
 	// Image-based lighting: bake irradiance/prefiltered cubes from the sky on compute and use them for
 	// ambient (#52). On by default; turn off to fall back to the analytic hemisphere ambient.
+	// One-shot GPU skinning self-test (anim.skin_verify): GPU vs CPU skinning, logged once. See
+	// SkinningSelfTest -- skinning has no visual output of its own, so this is its only headless check.
+	extern CVar<bool> SkinVerify;
+
 	extern CVar<bool> IBL;
 
 	// Multiplier on the IBL ambient contribution. Separate from SkyIntensity because the irradiance cube

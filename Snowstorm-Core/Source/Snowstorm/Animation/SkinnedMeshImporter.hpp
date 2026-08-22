@@ -26,8 +26,9 @@ namespace Snowstorm
 	struct SkinnedSubmesh
 	{
 		std::string Name;
-		CookedMesh Mesh;                       // the same cooked geometry type the static path produces
+		CookedMesh Mesh;                        // the same cooked geometry type the static path produces
 		std::vector<SkinnedVertexWeights> Skin; // parallel to Mesh.Vertices
+		uint32_t MaterialIndex = 0;             // index into the source's material list, as assimp reports it
 	};
 
 	struct SkinnedModel
