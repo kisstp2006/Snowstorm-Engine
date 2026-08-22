@@ -33,7 +33,7 @@ find_package(spdlog CONFIG REQUIRED)
 find_package(Stb REQUIRED)
 find_package(Vulkan REQUIRED)
 find_package(VulkanMemoryAllocator CONFIG REQUIRED)
-find_package(gli CONFIG REQUIRED)
+find_package(bc7enc CONFIG REQUIRED)
 find_package(volk CONFIG REQUIRED)
 find_package(unofficial-spirv-reflect CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
@@ -64,7 +64,7 @@ target_link_libraries(Snowstorm-Core PUBLIC
     volk::volk 
     volk::volk_headers
     GPUOpen::VulkanMemoryAllocator
-    gli
+    bc7enc::bc7enc
     unofficial::spirv-reflect
     nlohmann_json::nlohmann_json
     Tracy::TracyClient

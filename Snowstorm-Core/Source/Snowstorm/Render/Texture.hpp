@@ -140,7 +140,15 @@ namespace Snowstorm
 		// CPU-only decode: return the RGBA8 pixels for a source image, from the cooked .sstex blob if fresh
 		// else by stb-decoding (and writing the blob). No GPU work, so safe on a JobSystem worker. Returns
 		// nullopt on decode failure. `handle`/`sourceKey` key the cook cache; `generateMips` = the import setting.
-		static std::optional<CookedTexture> DecodeCPU(const std::filesystem::path& filePath, AssetHandle handle, uint64_t sourceKey, bool generateMips = true);
+		// `compress` asks for BC7 (the texture's import setting); `srgb` is the color intent, which a block
+		// format bakes in and which therefore also keys the cooked blob.
+		// `outWasCooked` reports which path ran: true = decoded + mipped (+ encoded) from the source, false
+		// = read the cooked blob. The loader logs the two differently -- a cold cook legitimately takes
+		// seconds, and without saying so a silent progress bar reads as a freeze.
+		static std::optional<CookedTexture> DecodeCPU(const std::filesystem::path& filePath, AssetHandle handle,
+		                                              uint64_t sourceKey, bool generateMips = true,
+		                                              bool compress = false, bool srgb = true,
+		                                              bool* outWasCooked = nullptr);
 
 	protected:
 		Texture() = default;

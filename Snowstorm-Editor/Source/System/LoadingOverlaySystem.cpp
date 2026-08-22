@@ -6,6 +6,9 @@
 
 #include <imgui.h>
 
+#include <string>
+#include <vector>
+
 namespace Snowstorm
 {
 	void LoadingOverlaySystem::Execute(Timestep)
@@ -56,6 +59,20 @@ namespace Snowstorm
 			if (assetPending > 0)
 			{
 				drawBar("Loading assets...", assetPending, assets.PendingLoadTotal());
+
+				// Name what the workers are actually on. A bar alone cannot distinguish "cooking a texture
+				// that legitimately takes seconds" from "hung", which is exactly the confusion a silent
+				// cold cook produced; the names also point straight at the culprit when one load stalls.
+				constexpr size_t kMaxNames = 3;
+				const std::vector<std::string> activity = assets.GetLoadActivity();
+				for (size_t i = 0; i < activity.size() && i < kMaxNames; ++i)
+				{
+					ImGui::TextDisabled("    %s", activity[i].c_str());
+				}
+				if (activity.size() > kMaxNames)
+				{
+					ImGui::TextDisabled("    +%zu more", activity.size() - kMaxNames);
+				}
 			}
 		}
 		ImGui::End();

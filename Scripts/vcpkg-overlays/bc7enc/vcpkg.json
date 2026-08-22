@@ -1,0 +1,11 @@
+{
+  "name": "bc7enc",
+  "version-date": "2022-07-04",
+  "description": "Rich Geldreich's BC7/BPTC block encoder. A single translation unit with no dependencies, used by the texture cook to compress to BC7.",
+  "homepage": "https://github.com/richgel999/bc7enc",
+  "license": "MIT",
+  "dependencies": [
+    { "name": "vcpkg-cmake", "host": true },
+    { "name": "vcpkg-cmake-config", "host": true }
+  ]
+}

@@ -111,6 +111,10 @@ namespace Snowstorm
 			return VK_FORMAT_R32G32B32A32_SFLOAT;
 		case PixelFormat::R11G11B10_UFloat:
 			return VK_FORMAT_B10G11R11_UFLOAT_PACK32;
+		case PixelFormat::BC7_UNorm:
+			return VK_FORMAT_BC7_UNORM_BLOCK;
+		case PixelFormat::BC7_sRGB:
+			return VK_FORMAT_BC7_SRGB_BLOCK;
 		case PixelFormat::D32_Float:
 			return VK_FORMAT_D32_SFLOAT;
 		case PixelFormat::D24_UNorm_S8_UInt:
@@ -139,10 +143,29 @@ namespace Snowstorm
 			return 8;
 		case PixelFormat::RGBA32_SFloat:
 			return 16;
+		case PixelFormat::BC7_UNorm:
+		case PixelFormat::BC7_sRGB:
+			return 0; // block format: there is no per-texel size. Use BytesForImage().
 		case PixelFormat::Unknown:
 			break;
 		}
 		return 0;
+	}
+
+	// Tightly-packed byte size of one mip level. For a block format this rounds the extent up to whole
+	// 4x4 blocks (a 5x5 BC7 mip is 2x2 blocks = 64 bytes, not 25 texels' worth), which is exactly what
+	// vkCmdCopyBufferToImage expects when bufferRowLength/bufferImageHeight are 0.
+	inline VkDeviceSize BytesForImage(const PixelFormat fmt, const uint32_t width, const uint32_t height)
+	{
+		if (IsBlockCompressed(fmt))
+		{
+			constexpr uint32_t kBlockSize = 4;
+			constexpr VkDeviceSize kBytesPerBlock = 16; // BC7
+			const VkDeviceSize blocksX = (width + kBlockSize - 1) / kBlockSize;
+			const VkDeviceSize blocksY = (height + kBlockSize - 1) / kBlockSize;
+			return blocksX * blocksY * kBytesPerBlock;
+		}
+		return static_cast<VkDeviceSize>(width) * height * BytesPerPixel(fmt);
 	}
 
 	inline VkImageUsageFlags ToVkUsage(const TextureUsage usage, const PixelFormat fmt)

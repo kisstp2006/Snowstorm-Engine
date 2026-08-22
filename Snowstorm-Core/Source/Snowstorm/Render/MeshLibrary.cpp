@@ -214,8 +214,13 @@ namespace Snowstorm
 		return lock;
 	}
 
-	std::optional<CookedMesh> MeshLibrary::LoadCookedCPU(const std::string& filepath, const int submeshIndex, const AssetHandle handle, const uint64_t sourceKey)
+	std::optional<CookedMesh> MeshLibrary::LoadCookedCPU(const std::string& filepath, const int submeshIndex, const AssetHandle handle, const uint64_t sourceKey,
+	                                                     bool* outWasCooked)
 	{
+		if (outWasCooked)
+		{
+			*outWasCooked = false; // both fast paths below return without cooking
+		}
 		// CPU-only: safe on a worker thread. No m_Meshes access (that map holds GPU resources and is
 		// main-thread-only); the caller finalizes on the main thread via FinalizeCooked.
 		const uint64_t sourceTime = sourceKey;
@@ -224,6 +229,11 @@ namespace Snowstorm
 		if (auto blob = MeshCacheIO::Load(handle, sourceTime))
 		{
 			return blob;
+		}
+
+		if (outWasCooked)
+		{
+			*outWasCooked = true;
 		}
 
 		// Cold cook. Serialize per-file so N workers don't each ReadFile the whole model (the cold-Sponza

@@ -39,7 +39,11 @@ namespace Snowstorm
 		// result (see AssetManagerSingleton async load). Returns nullopt on parse failure.
 		// `sourceKey` is the asset registry's freshness key (content hash ^ import settings) that keys the
 		// on-disk cooked blob; a different key re-parses the source.
-		std::optional<CookedMesh> LoadCookedCPU(const std::string& filepath, int submeshIndex, AssetHandle handle, uint64_t sourceKey);
+		// `outWasCooked` reports which path ran: true = parsed the source (seconds), false = read the blob
+		// (milliseconds). The loader logs the difference, because "it is cooking" and "it is hung" look the
+		// same from outside and only one of them is worth waiting for.
+		std::optional<CookedMesh> LoadCookedCPU(const std::string& filepath, int submeshIndex, AssetHandle handle, uint64_t sourceKey,
+		                                        bool* outWasCooked = nullptr);
 
 		// Build + cache the GPU Mesh from already-cooked CPU data (main thread only — creates Vulkan
 		// buffers). Keyed like LoadCached so a subsequent LoadCached/LoadCookedCPU hits the cache.

@@ -13,6 +13,9 @@
 
 #include "Snowstorm/Assets/MeshCache.hpp"
 
+#include <atomic>
+#include <chrono>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <filesystem>
@@ -86,8 +89,8 @@ namespace Snowstorm
 		// mesh handle" (or the source stopped being one).
 		struct SkinnedMeshGpu
 		{
-			Ref<Mesh> BindPose;   // vertex buffer = the un-posed vertices the skinning pass reads
-			Ref<Buffer> Skin;     // SkinnedVertexWeights per vertex, as a storage buffer
+			Ref<Mesh> BindPose; // vertex buffer = the un-posed vertices the skinning pass reads
+			Ref<Buffer> Skin;   // SkinnedVertexWeights per vertex, as a storage buffer
 			uint32_t VertexCount = 0;
 		};
 		const SkinnedMeshGpu* GetSkinnedMesh(AssetHandle handle);
@@ -114,6 +117,12 @@ namespace Snowstorm
 		// show loaded/total.
 		[[nodiscard]] uint32_t PendingLoadCount() const;
 		[[nodiscard]] uint32_t PendingLoadTotal() const { return m_PendingTotal; }
+
+		// The names of the assets whose cook/read is running on a worker RIGHT NOW, newest last, so a
+		// loading screen can say WHAT it is waiting for instead of showing a bare bar. Entries live for the
+		// whole job, which is the point: if a load stalls, its name stays on screen and names the culprit.
+		// Safe to call from the main thread while workers run.
+		[[nodiscard]] std::vector<std::string> GetLoadActivity() const;
 
 		// True when a bindless texture slot holds its REAL image, not the async magenta placeholder. Slot 0 =
 		// untextured (no dependency) counts as resident. A one-shot GPU consumer that samples a slot at build
@@ -227,6 +236,21 @@ namespace Snowstorm
 		std::vector<CompletedMeshLoad> m_CompletedMeshes;
 
 		uint32_t m_PendingTotal = 0; // high-water mark of in-flight loads since the queue was last empty
+
+		// --- Load activity (published by workers, read by the loading overlay) ----------------------
+		// Its own mutex, deliberately not m_CompletedMutex: publishing "I started X" must never contend
+		// with the completed-load hand-off that the main thread drains every frame.
+		mutable std::mutex m_ActivityMutex;
+		std::vector<std::string> m_Activity;
+
+		// Per-burst accounting for the one-line summary logged when the queue drains. A "burst" is one
+		// run of loads with no idle gap -- a level load, or the batch a hot-reload kicks off.
+		std::chrono::steady_clock::time_point m_BurstStart{};
+		std::atomic<uint32_t> m_BurstCooked{0}; // of the burst's loads, how many parsed/encoded from source
+
+		void BeginActivity(const std::string& name);
+		void EndActivity(const std::string& name, const char* kind, double ms, bool cooked);
+		void NotePendingLoad(); // ++m_PendingTotal, starting a new burst if the queue was idle
 
 		// --- Async texture loading (#84 increment 2) ---
 		// A worker-completed CPU decode waiting for main-thread GPU upload + bindless slot rewrite.

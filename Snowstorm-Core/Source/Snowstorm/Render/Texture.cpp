@@ -3,6 +3,7 @@
 #include "RendererAPI.hpp"
 #include "Snowstorm/Assets/AssetFileTime.hpp"
 #include "Snowstorm/Assets/TextureCache.hpp"
+#include "Snowstorm/Assets/TextureCompressor.hpp"
 #include "Snowstorm/Core/Log.hpp"
 #include "Platform/Vulkan/VulkanTexture.hpp"
 
@@ -76,19 +77,32 @@ namespace Snowstorm
 		}
 	}
 
-	std::optional<CookedTexture> Texture::DecodeCPU(const std::filesystem::path& filePath, const AssetHandle handle, const uint64_t sourceWriteTime, const bool generateMips)
+	std::optional<CookedTexture> Texture::DecodeCPU(const std::filesystem::path& filePath, const AssetHandle handle,
+	                                                const uint64_t sourceWriteTime, const bool generateMips,
+	                                                const bool compress, const bool srgb, bool* outWasCooked)
 	{
-		// CPU-only, worker-safe. Fast path: the cooked .sstex blob (no stb decode + no mip-gen). The decoded
-		// RGBA bytes are color-space-agnostic, so one blob serves both sRGB and linear views (srgb is applied
-		// later at GPU-upload time). Only cache handle-backed assets — handle 0 (inline/handle-less textures)
-		// would all collide on one "0.sstex", so skip the cache for those.
+		if (outWasCooked)
+		{
+			*outWasCooked = false; // set on the cold path below
+		}
+
+		// CPU-only, worker-safe. Fast path: the cooked .sstex blob (no stb decode, no mip-gen, no BC7
+		// encode). The blob is per color space: an uncompressed cook would serve both views, but a BC7 one
+		// bakes sRGB into the FORMAT, so sRGB and linear are separate blobs and the key includes it. Only
+		// cache handle-backed assets — handle 0 (inline/handle-less textures) would all collide on one
+		// "0.sstex", so skip the cache for those.
 		const bool useCache = (handle.Value() != 0);
 		if (useCache)
 		{
-			if (auto blob = TextureCacheIO::Load(handle, sourceWriteTime))
+			if (auto blob = TextureCacheIO::Load(handle, sourceWriteTime, srgb))
 			{
 				return blob;
 			}
+		}
+
+		if (outWasCooked)
+		{
+			*outWasCooked = true; // decode + mips (+ BC7): the slow path, seconds rather than milliseconds
 		}
 
 		int w = 0, h = 0, channels = 0;
@@ -123,9 +137,17 @@ namespace Snowstorm
 			ph = nh;
 		}
 
+		// BC7 last, over the finished mip chain: compressing the base and then downsampling BLOCKS would
+		// decode-and-requantize every level, compounding the error. Each mip is encoded from its own raw
+		// texels instead.
+		if (compress && TextureCompressor::IsAvailable())
+		{
+			TextureCompressor::CompressToBC7(cooked, srgb);
+		}
+
 		if (useCache)
 		{
-			(void)TextureCacheIO::Save(handle, sourceWriteTime, cooked); // decode+mip once; next load reads the blob
+			(void)TextureCacheIO::Save(handle, sourceWriteTime, srgb, cooked); // decode+mip once; next load reads the blob
 		}
 		return cooked;
 	}
@@ -143,12 +165,17 @@ namespace Snowstorm
 		desc.MipLevels = cooked.MipLevels();
 		desc.ArrayLayers = 1;
 		desc.Usage = TextureUsage::Sampled | TextureUsage::TransferDst;
-
 		// Color intent decides the sampled color space: albedo/emissive are authored in sRGB and must be
 		// decoded to linear on sample (srgb=true); normal/metallic-roughness/AO are data maps whose values
 		// are NOT gamma-encoded and must be read verbatim (srgb=false). Sampling a normal map as sRGB skews
 		// every channel and breaks lighting — the caller picks the flag per slot (see GetTextureView).
-		desc.Format = srgb ? PixelFormat::RGBA8_sRGB : PixelFormat::RGBA8_UNorm;
+		//
+		// A COMPRESSED blob already decided this: a block format carries its color space, and the blob was
+		// cooked for one intent (which is why the cache path is keyed by it). Its format wins -- describing
+		// BC7 bytes as RGBA8 makes the upload size the copy by 4 bytes per texel and overrun its staging
+		// buffer, which is exactly what happened when this line ran unconditionally.
+		desc.Format = IsBlockCompressed(cooked.Format) ? cooked.Format
+		                                               : (srgb ? PixelFormat::RGBA8_sRGB : PixelFormat::RGBA8_UNorm);
 		desc.DebugName = debugName;
 
 		auto texture = Texture::Create(desc);

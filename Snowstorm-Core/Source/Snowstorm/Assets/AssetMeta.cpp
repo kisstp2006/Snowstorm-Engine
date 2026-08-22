@@ -17,7 +17,8 @@ namespace Snowstorm
 		using namespace rttr;
 		registration::class_<TextureImportSettings>("Snowstorm::TextureImportSettings")
 		    .constructor()(policy::ctor::as_object)
-		    .property("GenerateMips", &TextureImportSettings::GenerateMips);
+		    .property("GenerateMips", &TextureImportSettings::GenerateMips)
+		    .property("Compress", &TextureImportSettings::Compress);
 		registration::class_<MeshImportSettings>("Snowstorm::MeshImportSettings")
 		    .constructor()(policy::ctor::as_object)
 		    .property("GenerateCollision", &MeshImportSettings::GenerateCollision);
@@ -29,7 +30,7 @@ namespace Snowstorm
 
 	bool operator==(const TextureImportSettings& a, const TextureImportSettings& b)
 	{
-		return a.GenerateMips == b.GenerateMips;
+		return a.GenerateMips == b.GenerateMips && a.Compress == b.Compress;
 	}
 	bool operator==(const MeshImportSettings& a, const MeshImportSettings& b)
 	{
@@ -189,6 +190,8 @@ namespace Snowstorm
 		if (type == AssetType::Texture)
 		{
 			mix(s.Texture.GenerateMips ? 1u : 2u);
+			// Part of the cook key: flipping compression has to re-cook, or the blob and the setting disagree.
+			mix(s.Texture.Compress ? 3u : 5u);
 		}
 		else if (type == AssetType::Mesh)
 		{

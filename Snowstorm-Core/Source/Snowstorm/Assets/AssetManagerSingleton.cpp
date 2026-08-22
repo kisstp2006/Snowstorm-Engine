@@ -22,6 +22,8 @@
 #include "Snowstorm/Assets/MaterialAssetIO.hpp"
 #include "Snowstorm/Project/Project.hpp"
 
+#include <algorithm>
+
 #include "Platform/Vulkan/VulkanBindlessManager.hpp"
 #include "Platform/Vulkan/VulkanTexture.hpp"
 
@@ -765,7 +767,7 @@ namespace Snowstorm
 		// main thread. Capture by value (handle, paths) — the singleton outlives the app's JobSystem, which
 		// is joined at shutdown before this singleton is destroyed, so `this` stays valid for the job.
 		m_InFlightMeshes.insert(handle);
-		++m_PendingTotal;
+		NotePendingLoad();
 
 		auto& jobs = Application::Get().GetServiceManager().GetService<JobSystem>();
 		auto& meshLib = Application::Get().GetServiceManager().GetService<MeshLibrary>();
@@ -774,20 +776,32 @@ namespace Snowstorm
 		const int submeshIndex = sub.SubmeshIndex;
 
 		const uint64_t sourceKey = m_Registry.SourceKey(handle);
-		(void)jobs.Submit([this, &meshLib, handle, filePath, submeshIndex, sourceKey]()
+
+		// What the overlay and the log call this job. The submesh index is part of the identity: a model is
+		// N separate loads, and "sponza.obj" appearing 25 times would read as a stuck loop.
+		const std::string activity = std::filesystem::path(filePath).filename().string() + "[" + std::to_string(submeshIndex) + "]";
+
+		(void)jobs.Submit([this, &meshLib, handle, filePath, submeshIndex, sourceKey, activity]()
 		                  {
 			CompletedMeshLoad done;
 			done.Handle = handle;
 			done.FilePath = filePath;
 			done.SubmeshIndex = submeshIndex;
 
+			BeginActivity(activity);
+			const auto started = std::chrono::steady_clock::now();
+			bool wasCooked = false;
+
 			// CPU-only work on the worker: read the cooked blob or parse+cook the source. No GPU, no
 			// m_MeshCache/m_Meshes access (those are main-thread-only).
-			if (auto cooked = meshLib.LoadCookedCPU(filePath, submeshIndex, handle, sourceKey))
+			if (auto cooked = meshLib.LoadCookedCPU(filePath, submeshIndex, handle, sourceKey, &wasCooked))
 			{
 				done.Cooked = std::move(*cooked);
 				done.Success = true;
 			}
+
+			const std::chrono::duration<double, std::milli> elapsed = std::chrono::steady_clock::now() - started;
+			EndActivity(activity, "mesh", elapsed.count(), wasCooked);
 
 			std::lock_guard lock(m_CompletedMutex);
 			m_CompletedMeshes.push_back(std::move(done)); });
@@ -930,12 +944,67 @@ namespace Snowstorm
 			}
 		}
 
-		// Once nothing is in flight (meshes AND textures) AND nothing is waiting to be finalized, reset the
-		// progress high-water mark for the next load burst.
+		// Once nothing is in flight (meshes AND textures) AND nothing is waiting to be finalized, close the
+		// burst: one summary line, then reset the high-water mark for the next one.
 		if (m_InFlightMeshes.empty() && m_InFlightTextures.empty())
 		{
+			if (m_PendingTotal > 0)
+			{
+				const std::chrono::duration<double> elapsed = std::chrono::steady_clock::now() - m_BurstStart;
+				const uint32_t cooked = m_BurstCooked.exchange(0);
+				// The number that explains a slow start: how many assets had to be built from source. A
+				// warm run reports 0 cooked and takes a fraction of the time.
+				SS_CORE_INFO("Assets: {} loaded ({} cooked from source) in {:.1f} s", m_PendingTotal, cooked, elapsed.count());
+			}
 			m_PendingTotal = 0;
 		}
+	}
+
+	void AssetManagerSingleton::NotePendingLoad()
+	{
+		if (m_PendingTotal == 0)
+		{
+			m_BurstStart = std::chrono::steady_clock::now();
+			m_BurstCooked.store(0);
+		}
+		++m_PendingTotal;
+	}
+
+	void AssetManagerSingleton::BeginActivity(const std::string& name)
+	{
+		std::lock_guard lock(m_ActivityMutex);
+		m_Activity.push_back(name);
+	}
+
+	void AssetManagerSingleton::EndActivity(const std::string& name, const char* kind, const double ms, const bool cooked)
+	{
+		{
+			std::lock_guard lock(m_ActivityMutex);
+			// Erase THIS occurrence, not every match: the same source can legitimately be in flight twice
+			// (a texture requested in both color spaces), and clearing both would empty the overlay early.
+			if (const auto it = std::find(m_Activity.begin(), m_Activity.end(), name); it != m_Activity.end())
+			{
+				m_Activity.erase(it);
+			}
+		}
+
+		if (cooked)
+		{
+			m_BurstCooked.fetch_add(1);
+			// INFO, because this is the time a user actually waits through: parsing a model or encoding a
+			// texture is seconds of work, and naming it is the difference between "cooking" and "frozen".
+			SS_CORE_INFO("Cooked {} '{}' in {:.0f} ms", kind, name, ms);
+		}
+		else
+		{
+			SS_CORE_TRACE("Loaded {} '{}' from cache in {:.1f} ms", kind, name, ms);
+		}
+	}
+
+	std::vector<std::string> AssetManagerSingleton::GetLoadActivity() const
+	{
+		std::lock_guard lock(m_ActivityMutex);
+		return m_Activity;
 	}
 
 	uint32_t AssetManagerSingleton::PendingLoadCount() const
@@ -1066,15 +1135,16 @@ namespace Snowstorm
 			return false;
 		}
 		m_InFlightTextures.insert(key);
-		++m_PendingTotal;
+		NotePendingLoad();
 
 		auto& jobs = Application::Get().GetServiceManager().GetService<JobSystem>();
 		const std::string path = ResolveAssetPath(meta.Path).string();
 		const std::string debugName = meta.Path.filename().string();
 		const uint64_t sourceTime = m_Registry.SourceKey(handle);
 		const bool generateMips = m_Registry.GetImportSettings(handle).Texture.GenerateMips;
+		const bool compress = m_Registry.GetImportSettings(handle).Texture.Compress;
 
-		(void)jobs.Submit([this, key, handle, srgb, slot, path, sourceTime, generateMips, debugName]()
+		(void)jobs.Submit([this, key, handle, srgb, slot, path, sourceTime, generateMips, compress, debugName]()
 		                  {
 			CompletedTextureLoad done;
 			done.Key = key;
@@ -1083,12 +1153,19 @@ namespace Snowstorm
 			done.Slot = slot;
 			done.DebugName = debugName;
 
-			// CPU-only on the worker: cooked-blob read or stb decode (+ cache write). No GPU.
-			if (auto cooked = Texture::DecodeCPU(path, handle, sourceTime, generateMips))
+			BeginActivity(debugName);
+			const auto started = std::chrono::steady_clock::now();
+			bool wasCooked = false;
+
+			// CPU-only on the worker: cooked-blob read or stb decode (+ mips + BC7 + cache write). No GPU.
+			if (auto cooked = Texture::DecodeCPU(path, handle, sourceTime, generateMips, compress, srgb, &wasCooked))
 			{
 				done.Cooked = std::move(*cooked);
 				done.Success = true;
 			}
+
+			const std::chrono::duration<double, std::milli> elapsed = std::chrono::steady_clock::now() - started;
+			EndActivity(debugName, "texture", elapsed.count(), wasCooked);
 
 			std::lock_guard lock(m_CompletedMutex);
 			m_CompletedTextures.push_back(std::move(done)); });
