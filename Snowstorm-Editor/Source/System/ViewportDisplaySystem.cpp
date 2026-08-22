@@ -1,4 +1,5 @@
 #include "ViewportDisplaySystem.hpp"
+#include "Snowstorm/Math/CameraProjection.hpp"
 #include "Snowstorm/Math/Transform.hpp"
 
 #include "Snowstorm/Components/CameraComponent.hpp"
@@ -538,7 +539,22 @@ namespace Snowstorm
 			{
 				continue;
 			}
-			const auto& camRt = reg.Read<CameraRuntimeComponent>(camEntity);
+			// Project the overlay (gizmo, light icons, debug lines, picking) with THIS frame's camera pose,
+			// not the CameraRuntimeComponent cache: that cache is rebuilt in Resolve, after this UI-phase
+			// system, so it still holds last frame's view -> every overlay lagged the scene by a frame
+			// whenever the camera moved. Same math as CameraRuntimeUpdateSystem (CameraProjection.hpp).
+			struct
+			{
+				glm::mat4 View;
+				glm::mat4 Projection;
+				glm::mat4 ViewProjection;
+			} camRt;
+			{
+				const auto& cam = reg.Read<CameraComponent>(camEntity);
+				camRt.View = glm::inverse(m_World->ComputeWorldMatrix(Entity{camEntity, m_World}));
+				camRt.Projection = BuildCameraProjection(cam, ComputeCameraAspect(cam, vp));
+				camRt.ViewProjection = camRt.Projection * camRt.View;
+			}
 
 			// Cycle gizmo operation with W/E/R while the viewport is hovered — but not while ImGui owns the
 			// keyboard (e.g. typing in the console / a text field), so those letters don't double as gizmo

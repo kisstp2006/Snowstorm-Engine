@@ -1,5 +1,7 @@
 ﻿#include "CameraRuntimeUpdateSystem.hpp"
 
+#include "Snowstorm/Math/CameraProjection.hpp"
+
 #include "Snowstorm/Components/IDComponent.hpp"
 #include "Snowstorm/Components/TransformComponent.hpp"
 #include "Snowstorm/Components/WorldTransformComponent.hpp"
@@ -19,35 +21,6 @@ namespace Snowstorm
 		bool HasValidViewportSize(const ViewportComponent& vp)
 		{
 			return vp.Size.x >= 1.0f && vp.Size.y >= 1.0f;
-		}
-
-		float ComputeAspect(const CameraComponent& cam, const ViewportComponent& vp)
-		{
-			if (cam.FixedAspectRatio && cam.AspectRatio > 0.0001f)
-				return cam.AspectRatio;
-
-			const float w = vp.Size.x;
-			const float h = vp.Size.y;
-			return (h > 0.0001f) ? (w / h) : (16.0f / 9.0f);
-		}
-
-		// NOTE:
-		// Your engine’s clip space conventions matter (Vulkan vs D3D/OpenGL).
-		// This uses glm defaults. If you use Vulkan (0..1 Z) you likely want:
-		// - glm::perspectiveRH_ZO
-		// - and possibly flip Y (proj[1][1] *= -1)
-		glm::mat4 BuildProjection(const CameraComponent& cam, float aspect)
-		{
-			if (cam.Projection == CameraComponent::ProjectionType::Perspective)
-			{
-				return glm::perspectiveRH_ZO(cam.PerspectiveFOV, aspect, cam.PerspectiveNear, cam.PerspectiveFar);
-			}
-
-			// OrthographicSize is “height” in world units (common convention)
-			const float halfH = cam.OrthographicSize * 0.5f;
-			const float halfW = halfH * aspect;
-
-			return glm::ortho(-halfW, halfW, -halfH, halfH, cam.OrthographicNear, cam.OrthographicFar);
 		}
 	}
 
@@ -156,7 +129,7 @@ namespace Snowstorm
 				continue;
 			}
 
-			const float aspect = ComputeAspect(cam, vp);
+			const float aspect = ComputeCameraAspect(cam, vp);
 
 			auto& rt = reg.Write<CameraRuntimeComponent>(camE);
 
@@ -166,7 +139,7 @@ namespace Snowstorm
 
 			const glm::mat4& world = tr.LocalToWorld;
 			rt.View = glm::inverse(world);
-			rt.Projection = BuildProjection(cam, aspect);
+			rt.Projection = BuildCameraProjection(cam, aspect);
 			rt.ViewProjection = rt.Projection * rt.View;
 
 			// Update frustum from VP
