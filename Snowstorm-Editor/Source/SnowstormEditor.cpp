@@ -3,7 +3,9 @@
 
 #include "EditorLayer.hpp"
 
-#include "Service/ImGuiService.hpp"
+#include "EditorModule.hpp"
+
+#include <Snowstorm/Core/CoreModule.hpp>
 
 namespace Snowstorm
 {
@@ -11,9 +13,8 @@ namespace Snowstorm
 	{
 	public:
 		SnowstormEditor()
-		    : Application("Snowstorm-Editor")
+		    : Application("Snowstorm-Editor", Modules<CoreModule, EditorModule>())
 		{
-			m_ServiceManager->RegisterService<ImGuiService>();
 
 			PushLayer(new EditorLayer());
 		}

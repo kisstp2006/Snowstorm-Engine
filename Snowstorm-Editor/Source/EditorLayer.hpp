@@ -73,7 +73,6 @@ namespace Snowstorm
 		bool SaveWorldToFile(const std::string& scenePath) const;
 		bool SaveActiveScene() const;
 
-		void RegisterEditorSystems() const;
 		void CreateMainViewportEntity();
 
 		void CreateDemoEntities() const;

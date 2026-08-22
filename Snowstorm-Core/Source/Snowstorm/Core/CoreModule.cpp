@@ -1,17 +1,19 @@
-#include "CoreSystems.hpp"
+#include "CoreModule.hpp"
 
+#include "Snowstorm/Core/JobSystem.hpp"
 #include "Snowstorm/ECS/SystemManager.hpp"
 #include "Snowstorm/ECS/SystemPhase.hpp"
-#include "Snowstorm/World/World.hpp"
-
 #include "Snowstorm/Lighting/EnvironmentSystem.hpp"
 #include "Snowstorm/Lighting/LightingSystem.hpp"
+#include "Snowstorm/Render/MeshLibrary.hpp"
+#include "Snowstorm/Render/RendererService.hpp"
+#include "Snowstorm/Render/Shader.hpp"
+#include "Snowstorm/Service/ServiceManager.hpp"
 #include "Snowstorm/Systems/AssetLoadSystem.hpp"
 #include "Snowstorm/Systems/CameraControllerSystem.hpp"
 #include "Snowstorm/Systems/CameraJitterSystem.hpp"
 #include "Snowstorm/Systems/CameraPathSystem.hpp"
 #include "Snowstorm/Systems/CameraRuntimeUpdateSystem.hpp"
-#include "Snowstorm/Systems/TransformSystem.hpp"
 #include "Snowstorm/Systems/MaterialResolveSystem.hpp"
 #include "Snowstorm/Systems/MeshResolveSystem.hpp"
 #include "Snowstorm/Systems/PrevTransformSnapshotSystem.hpp"
@@ -22,27 +24,38 @@
 #include "Snowstorm/Systems/ScriptSystem.hpp"
 #include "Snowstorm/Systems/ShaderReloadSystem.hpp"
 #include "Snowstorm/Systems/TlasBuildSystem.hpp"
+#include "Snowstorm/Systems/TransformSystem.hpp"
 #include "Snowstorm/Systems/VisibilitySystem.hpp"
+#include "Snowstorm/World/World.hpp"
 
 namespace Snowstorm
 {
-	void RegisterCoreSystems(World& world)
+	void CoreModule::RegisterServices(ServiceManager& services)
+	{
+		// Job system first: it's the off-main-thread work pool the others may submit to (async asset
+		// loading), and it's device-independent so it can exist before the Vulkan-bound services.
+		services.RegisterService<JobSystem>();
+
+		// Device-bound, application-scoped subsystems. Registered after Renderer::Init so the Vulkan device
+		// exists. Order among these is not significant (none tick, none depend on another at construction).
+		services.RegisterService<RendererService>();
+		services.RegisterService<ShaderLibrary>();
+		services.RegisterService<MeshLibrary>();
+	}
+
+	void CoreModule::RegisterWorld(World& world)
 	{
 		auto& sm = world.GetSystemManager();
 
 		sm.RegisterSystem<RuntimeInitSystem>(SystemPhase::Init);
 
 		sm.RegisterSystem<ScriptSystem>(SystemPhase::Logic);
-		// Enforce the single-Primary-camera invariant BEFORE the controller + render camera resolution read it,
-		// so every downstream consumer sees an at-most-one-Primary state (Unity MainCamera / Unreal semantics).
 		sm.RegisterSystem<PrimaryCameraSystem>(SystemPhase::Logic);
 		sm.RegisterSystem<CameraControllerSystem>(SystemPhase::Logic);
-		// After the controller so the scripted benchmark path overrides free-fly input when camera.path is on.
 		sm.RegisterSystem<CameraPathSystem>(SystemPhase::Logic);
 		sm.RegisterSystem<RotatorSystem>(SystemPhase::Logic);
 
 		sm.RegisterSystem<ShaderReloadSystem>(SystemPhase::AssetSync);
-		// Pump worker-completed async loads (GPU finalize) before the Resolve phase consumes them.
 		sm.RegisterSystem<AssetLoadSystem>(SystemPhase::AssetSync);
 
 		sm.RegisterSystem<TransformSystem>(SystemPhase::Resolve); // world matrices first: everything below reads them
@@ -53,17 +66,12 @@ namespace Snowstorm
 		sm.RegisterSystem<EnvironmentSystem>(SystemPhase::PreRender);
 		sm.RegisterSystem<LightingSystem>(SystemPhase::PreRender);
 		sm.RegisterSystem<VisibilitySystem>(SystemPhase::PreRender);
-		// Build/refresh the ray-tracing TLAS from the resolved meshes before the RT passes consume it (#118).
-		// No-op on a non-RT device. After MeshResolve (Resolve phase) so MeshRuntimeComponent instances are populated.
+		// After the resolve systems so MeshRuntimeComponent instances are populated; no-op on a non-RT device.
 		sm.RegisterSystem<TlasBuildSystem>(SystemPhase::PreRender);
-		// Temporal jitter (#44): fill each camera's JitteredViewProjection every frame. After the runtime
-		// update (Resolve) so Projection/View exist; reads the unjittered VP, writes a jittered copy.
 		sm.RegisterSystem<CameraJitterSystem>(SystemPhase::PreRender);
 
 		sm.RegisterSystem<RenderSystem>(SystemPhase::Render);
-
-		// End-of-frame: snapshot this frame's transforms into the *Prev* slots for next frame's motion
-		// vectors (#44). Registered AFTER RenderSystem so it captures the values the frame just rendered.
+		// Last: snapshots this frame's world matrices / view-projection as next frame's "previous".
 		sm.RegisterSystem<PrevTransformSnapshotSystem>(SystemPhase::Render);
 	}
 }

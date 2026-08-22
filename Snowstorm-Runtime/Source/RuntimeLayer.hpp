@@ -5,7 +5,7 @@
 namespace Snowstorm
 {
 	// Editor-independent host for the engine. Builds a World, registers the same engine
-	// systems the editor uses (via RegisterCoreSystems), and runs the simulation each frame.
+	// systems the editor uses (via CoreModule), and runs the simulation each frame.
 	// This is the "player"/runtime executable. With no ImGui backend, RenderSystem's PresentPass
 	// composes the primary viewport onto the swapchain (#4).
 	class RuntimeLayer final : public Layer

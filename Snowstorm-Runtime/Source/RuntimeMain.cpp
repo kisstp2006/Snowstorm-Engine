@@ -3,6 +3,8 @@
 
 #include "RuntimeLayer.hpp"
 
+#include <Snowstorm/Core/CoreModule.hpp>
+
 namespace Snowstorm
 {
 	// The "player": links Core, runs the engine without any editor tooling.
@@ -11,7 +13,7 @@ namespace Snowstorm
 	{
 	public:
 		SnowstormRuntime()
-		    : Application("Snowstorm-Runtime")
+		    : Application("Snowstorm-Runtime", Modules<CoreModule>())
 		{
 			PushLayer(new RuntimeLayer());
 		}

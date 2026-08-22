@@ -88,7 +88,7 @@ Snowstorm-Core/      # STATIC library: all engine code (the only place most work
   Source/Snowstorm/  #   platform-independent engine (Core, ECS, Render, Systems, ...)
   Source/Platform/   #   Vulkan/ (RHI implementation, ~28 files) and Windows/
 Snowstorm-Editor/    # Editor EXECUTABLE — links Core; ImGui dockspace, panels, viewport
-Snowstorm-Runtime/   # Editor-free runtime EXECUTABLE — links Core; shares RegisterCoreSystems (WIP)
+Snowstorm-Runtime/   # Editor-free runtime EXECUTABLE — links Core; assembled from {Core} modules only
 Assets/              # Shaders, Meshes, Materials, Scenes, Textures (loaded at runtime)
 Scripts/             # Generate-Solution.bat (convenience), vcpkg-overlays/ (local port overrides)
 Tools/dxc/           # DirectX Shader Compiler (HLSL -> SPIR-V)
@@ -110,6 +110,15 @@ see, so treat it as part of the feature, not an afterthought.
 - **Entry point:** clients define `Snowstorm::CreateApplication()`; `Core/EntryPoint.hpp` provides
   `main` (inits logging, wraps `Run()` in profiler sessions). `Application` owns the window, the
   `LayerStack`, the `EventBus`, and the `ServiceManager` (singleton via `Application::Get()`).
+- **Modules:** an executable is assembled from `IModule`s (`Core/Module.hpp`; Unreal IModuleInterface /
+  ezEngine plugin shape): `Application(name, Modules<CoreModule, EditorModule>())`. `ModuleRegistry`
+  orders them by `Dependencies()` and calls `RegisterTypes` → `RegisterServices(ServiceManager&)` once at
+  startup, then `RegisterWorld(World&)` for **every** World the app creates (from the `World` ctor). A
+  module checks `World::Type()` (`Game`/`Editor`/`Utility`, cf. Unreal EWorldType) to decide what to add —
+  `EditorModule` puts its UI systems only on Editor worlds. `CoreModule` is the engine itself (job system,
+  GPU services, the built-in systems in phase order). New engine features that bring systems/services
+  belong in a module, not in a hand-written registration list. Modules are linked statically today;
+  loading one from a DLL changes only how the `IModule` instance is obtained.
 - **ECS:** EnTT-backed. `World`/`Entity` (`World/`), components in `Components/`, behavior in
   `Systems/` (managed by `SystemManager`), cross-cutting state in `Singletons/` (`SingletonManager`),
   and `Service/` for longer-lived services. Components self-register for reflection via **RTTR** plus

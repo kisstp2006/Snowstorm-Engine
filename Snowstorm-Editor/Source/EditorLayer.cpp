@@ -43,7 +43,6 @@
 #include "Snowstorm/Render/Renderer.hpp"
 #include "Snowstorm/Render/RendererUtils.hpp"
 #include "Snowstorm/Render/SceneBounds.hpp"
-#include "Snowstorm/Systems/CoreSystems.hpp"
 #include "Singletons/EditorCommandsSingleton.hpp"
 #include "Singletons/EditorHistorySingleton.hpp"
 #include "Singletons/EditorSelectionSingleton.hpp"
@@ -104,8 +103,7 @@ namespace Snowstorm
 		if (m_ShowProjectStartScreen)
 		{
 			Project::SetActive(nullptr);
-			m_ActiveWorld = CreateRef<World>();
-			RegisterCoreSystems(*m_ActiveWorld);
+			m_ActiveWorld = CreateRef<World>(WorldType::Utility); // placeholder while the picker is up
 			return;
 		}
 
@@ -140,8 +138,7 @@ namespace Snowstorm
 				              "unattended run; aborting. Point --startup.project at a valid .ssproj.",
 				              ssproj.string());
 				Project::SetActive(nullptr);
-				m_ActiveWorld = CreateRef<World>();
-				RegisterCoreSystems(*m_ActiveWorld);
+				m_ActiveWorld = CreateRef<World>(WorldType::Utility);
 				Application::Get().Close(EXIT_FAILURE);
 				return;
 			}
@@ -149,8 +146,7 @@ namespace Snowstorm
 			SS_CORE_WARN("Could not auto-open project '{}'; showing the project picker.", ssproj.string());
 			Project::SetActive(nullptr);
 			m_ShowProjectStartScreen = true;
-			m_ActiveWorld = CreateRef<World>();
-			RegisterCoreSystems(*m_ActiveWorld);
+			m_ActiveWorld = CreateRef<World>(WorldType::Utility); // placeholder while the picker is up
 			return;
 		}
 
@@ -165,7 +161,7 @@ namespace Snowstorm
 		{
 			EditorPreferences::RecordProject(project->GetName(), ssproj);
 		}
-		m_ActiveWorld = CreateRef<World>();
+		m_ActiveWorld = CreateRef<World>(WorldType::Editor);
 
 		InitializeActiveWorld();
 
@@ -348,8 +344,6 @@ namespace Snowstorm
 			};
 		}
 
-		RegisterCoreSystems(*m_ActiveWorld); // engine systems (shared with a future runtime)
-		RegisterEditorSystems();             // editor-only systems on top
 
 		// Create the editor's persistent Scene-view camera + viewport BEFORE any scene loads. They are
 		// tagged DoNotSerialize (see CreateMainViewportEntity/CreateCameraEntities), so they survive scene
@@ -429,7 +423,7 @@ namespace Snowstorm
 
 		// CloseProject already drained the GPU and dropped the old World (if there was one) — build
 		// the new project's World fresh and wire it up the same way OnAttach does.
-		m_ActiveWorld = CreateRef<World>();
+		m_ActiveWorld = CreateRef<World>(WorldType::Editor);
 		InitializeActiveWorld();
 
 		// Deferred, same as a normal "Open Scene" — if the project has no start scene yet (e.g. a
@@ -842,79 +836,6 @@ namespace Snowstorm
 		}
 
 		return SaveWorldToFile(m_ActiveScenePath);
-	}
-
-	void EditorLayer::RegisterEditorSystems() const
-	{
-		auto& systemManager = m_ActiveWorld->GetSystemManager();
-		auto& singletonManager = m_ActiveWorld->GetSingletonManager();
-
-		singletonManager.RegisterSingleton<EditorNotificationsSingleton>();
-		singletonManager.RegisterSingleton<EditorSelectionSingleton>();
-		singletonManager.RegisterSingleton<EditorHistorySingleton>();
-		singletonManager.RegisterSingleton<EditorStatusBarSingleton>();
-		singletonManager.RegisterSingleton<SimulationStateSingleton>();
-
-		// Install the editor-integration hooks (#162): Core-run systems (RotatorSystem, ComponentRegistry,
-		// World::ClearSceneEntities) call these, but Core no longer names the editor's selection/history
-		// types. Wire them to the real singletons here. Captured `world` outlives these callbacks (same
-		// World owns both the hooks and the target singletons); the hooks singleton is registered by Core
-		// in the World ctor, so it already exists — we only fill its callbacks.
-		{
-			World* world = m_ActiveWorld.get();
-			auto& hooks = singletonManager.GetSingleton<EditorHooksSingleton>();
-
-			hooks.ManipulatedEntity = [world]() -> entt::entity
-			{
-				const auto& sel = world->GetSingleton<EditorSelectionSingleton>();
-				return (sel.GizmoActive && sel.Selected) ? sel.Selected.Handle() : entt::null;
-			};
-
-			hooks.HasPendingComponentEdit = [world]() -> bool
-			{
-				return world->GetSingleton<EditorHistorySingleton>().HasPendingEdit();
-			};
-			hooks.BeginComponentEdit = [world](const UUID target, const std::string& typeName, nlohmann::json before)
-			{
-				world->GetSingleton<EditorHistorySingleton>().BeginEdit(target, typeName, std::move(before));
-			};
-			hooks.FinalizeComponentEdit = [world](nlohmann::json after)
-			{
-				world->GetSingleton<EditorHistorySingleton>().FinalizeEdit(std::move(after));
-			};
-
-			hooks.OnSceneCleared = [world]()
-			{
-				// A scene wipe leaves selection/undo pointing at destroyed entities. Reset selection and
-				// drop history (its commands reference a world that no longer exists). Consolidates what
-				// World::ClearSceneEntities used to do inline for selection, plus the history Clear that
-				// TryLoadWorldFromFile did separately.
-				auto& sel = world->GetSingleton<EditorSelectionSingleton>();
-				sel.Selected = {};
-				sel.GizmoActive = false;
-				world->GetSingleton<EditorHistorySingleton>().Clear();
-			};
-		}
-
-		// Editor UI systems. The UI phase is empty in a packaged runtime, so the engine
-		// systems (registered by RegisterCoreSystems) run identically with or without these.
-		// StatusBarSystem first: it reserves the bottom strip via BeginViewportSideBar before
-		// DockspaceSetupSystem sizes the dockspace to the (now-shrunk) viewport work-area.
-		systemManager.RegisterSystem<StatusBarSystem>(SystemPhase::UI);
-		systemManager.RegisterSystem<DockspaceSetupSystem>(SystemPhase::UI);
-		systemManager.RegisterSystem<ViewportResizeSystem>(SystemPhase::UI);
-		systemManager.RegisterSystem<ViewportDisplaySystem>(SystemPhase::UI);
-		systemManager.RegisterSystem<EditorMenuSystem>(SystemPhase::UI);
-		systemManager.RegisterSystem<EditorNotificationSystem>(SystemPhase::UI);
-		systemManager.RegisterSystem<SceneHierarchySystem>(SystemPhase::UI);
-		systemManager.RegisterSystem<ContentBrowserSystem>(SystemPhase::UI);
-		systemManager.RegisterSystem<CameraFocusSystem>(SystemPhase::UI);
-		systemManager.RegisterSystem<LoadingOverlaySystem>(SystemPhase::UI);
-		systemManager.RegisterSystem<CVarPanelSystem>(SystemPhase::UI);
-		systemManager.RegisterSystem<ConsoleSystem>(SystemPhase::UI);
-
-		// Editor example
-		systemManager.RegisterSystem<MandelbrotControllerSystem>(SystemPhase::PreRender);
 	}
 
 	void EditorLayer::CreateMainViewportEntity()

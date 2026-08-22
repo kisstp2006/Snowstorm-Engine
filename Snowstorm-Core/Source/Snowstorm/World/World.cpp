@@ -20,13 +20,14 @@
 
 namespace Snowstorm
 {
-	World::World()
+	World::World(const WorldType type)
+	    : m_Type(type)
 	{
 		m_SystemManager = CreateScope<SystemManager>(this);
 		m_SingletonManager = CreateScope<SingletonManager>();
 
 		// World-scoped, per-scene state only. The renderer + shader/mesh libraries are device-lifetime and
-		// now live in the application's ServiceManager (see RegisterCoreServices), shared across all Worlds.
+		// now live in the application's ServiceManager (see CoreModule), shared across all Worlds.
 		m_SingletonManager->RegisterSingleton<InputStateSingleton>();
 
 		// Editor-integration seam (#162): Core-run systems invoke these callbacks; the editor installs them.
@@ -54,6 +55,14 @@ namespace Snowstorm
 			auto& bus = Application::Get().GetEventBus();
 			auto& input = m_SingletonManager->GetSingleton<InputStateSingleton>();
 			m_InputEventBridge = CreateScope<InputEventBridge>(bus, input);
+		}
+
+		// Every module the application is assembled from contributes its singletons/systems to every World
+		// (CoreModule: the engine systems; EditorModule: UI, on Editor worlds only). Tests construct Worlds
+		// with no Application, and get no systems — as before.
+		if (Application::Exists())
+		{
+			Application::Get().GetModules().RegisterWorld(*this);
 		}
 	}
 

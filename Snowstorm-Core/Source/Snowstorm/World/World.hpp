@@ -18,10 +18,22 @@ namespace Snowstorm
 	class SystemManager;
 	class Entity;
 
+	// What a World is for (Unreal EWorldType): modules consult it in RegisterWorld — the editor module adds
+	// its UI systems only to an Editor world, never to the runtime's Game world or a Utility world (the
+	// project picker's placeholder, test worlds).
+	enum class WorldType : uint8_t
+	{
+		Game,
+		Editor,
+		Utility,
+	};
+
 	class World final : public NonCopyable
 	{
 	public:
-		World();
+		explicit World(WorldType type = WorldType::Game);
+
+		[[nodiscard]] WorldType Type() const { return m_Type; }
 		// Out-of-line: m_SystemManager is a unique_ptr to a forward-declared type, so the
 		// destructor must be emitted in World.cpp where SystemManager is a complete type.
 		~World();
@@ -102,6 +114,7 @@ namespace Snowstorm
 		Scope<InputEventBridge> m_InputEventBridge;
 
 		std::vector<entt::entity> m_PendingDestroy; // flushed at end of frame by FlushDestroyQueue
+		WorldType m_Type = WorldType::Game;
 
 		void UnlinkFromParent(entt::entity child) const;
 		void SetDepthRecursive(entt::entity root, uint32_t depth) const;

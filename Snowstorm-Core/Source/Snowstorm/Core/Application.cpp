@@ -4,7 +4,6 @@
 
 #include <ranges>
 
-#include "Snowstorm/Core/CoreServices.hpp"
 #include "Snowstorm/Core/EngineCVars.hpp"
 #include "Snowstorm/Debug/Instrumentor.hpp"
 #include "Snowstorm/Render/PerfBench.hpp"
@@ -17,7 +16,7 @@ namespace Snowstorm
 {
 	Application* Application::s_Instance = nullptr;
 
-	Application::Application(const std::string& name)
+	Application::Application(const std::string& name, std::vector<Scope<IModule>> modules)
 	{
 		SS_PROFILE_FUNCTION();
 
@@ -36,14 +35,15 @@ namespace Snowstorm
 
 		Renderer::Init(m_Window->GetNativeWindow());
 
-		// GPU subsystems (renderer + shader/mesh caches) are application-scoped and device-bound, so they
-		// register here — after the device exists, before any World is created. Shared across all Worlds.
-		RegisterCoreServices(*m_ServiceManager);
-
-		// Component reflection (RTTR) + editor/serializer registration happen via per-component static
-		// initializers (RTTR_REGISTRATION + AUTO_REGISTER_COMPONENT). Snowstorm-Core is a static lib, so
-		// the executables link it WHOLE_ARCHIVE to keep those initializer TUs from being dropped — there
-		// is no manual registration list to call here.
+		// Modules register their types and application-scoped services here — after the device exists
+		// (GPU services are device-bound), before any World is created (Worlds pull their systems from
+		// the same modules). Component reflection still happens in per-component static initializers
+		// (RTTR_REGISTRATION + AUTO_REGISTER_COMPONENT), kept alive by linking Core WHOLE_ARCHIVE.
+		for (auto& m : modules)
+		{
+			m_Modules.Add(std::move(m));
+		}
+		m_Modules.Initialize(*m_ServiceManager);
 	}
 
 	Application::~Application()
@@ -57,6 +57,7 @@ namespace Snowstorm
 		Renderer::WaitIdle();
 
 		m_LayerStack.reset();
+		m_Modules.Shutdown();
 
 		Renderer::ShutdownImGuiBackend();
 

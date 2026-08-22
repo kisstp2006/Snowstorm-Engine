@@ -5,6 +5,7 @@
 #include "Snowstorm/Events/Event.hpp"
 #include "Snowstorm/Events/ApplicationEvent.hpp"
 #include "Snowstorm/Events/EventBus.hpp"
+#include "Snowstorm/Core/ModuleRegistry.hpp"
 #include "Snowstorm/Service/ServiceManager.hpp"
 
 namespace Snowstorm
@@ -12,7 +13,9 @@ namespace Snowstorm
 	class Application : public NonCopyable
 	{
 	public:
-		explicit Application(const std::string& name = "Snowstorm App");
+		// `modules` is what this executable is made of (see Modules<...>()); initialized after the render
+		// device exists and before any World. Core must be among them.
+		explicit Application(const std::string& name, std::vector<Scope<IModule>> modules);
 		~Application() override;
 
 		// Run until a window/user request or an automated mode stops the application. Returning the stored
@@ -35,11 +38,14 @@ namespace Snowstorm
 		static bool Exists() { return s_Instance != nullptr; }
 
 		ServiceManager& GetServiceManager() const { return *m_ServiceManager; }
+		ModuleRegistry& GetModules() { return m_Modules; }
+		const ModuleRegistry& GetModules() const { return m_Modules; }
 
 		EventBus& GetEventBus() const { return *m_EventBus; }
 
 	protected:
 		Scope<ServiceManager> m_ServiceManager;
+		ModuleRegistry m_Modules;
 
 	private:
 		Scope<Window> m_Window;

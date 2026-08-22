@@ -8,7 +8,6 @@
 #include "Snowstorm/Core/Log.hpp"
 #include "Snowstorm/Project/Project.hpp"
 #include "Snowstorm/Project/ProjectSerializer.hpp"
-#include "Snowstorm/Systems/CoreSystems.hpp"
 #include "Snowstorm/World/SceneSerializer.hpp"
 
 #include "Snowstorm/Components/CameraComponent.hpp"
@@ -72,7 +71,6 @@ namespace Snowstorm
 		m_World->GetSingleton<AssetManagerSingleton>().LoadRegistry(activeProject->GetAssetRegistryPath());
 
 		// The SAME engine systems the editor runs — without the editor/UI systems on top.
-		RegisterCoreSystems(*m_World);
 
 		// The viewport is host-owned (window-sized), so create it before the scene loads. The CAMERA, in
 		// contrast, is scene-owned (#147): a scene can author a gameplay camera, and the runtime uses it.
