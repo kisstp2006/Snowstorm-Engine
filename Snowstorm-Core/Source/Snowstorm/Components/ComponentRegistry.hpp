@@ -5,6 +5,7 @@
 #include <vector>
 #include <string>
 #include <functional>
+#include <type_traits>
 #include <cctype>
 #include <rttr/type>
 #include <imgui.h>
@@ -138,6 +139,26 @@ namespace Snowstorm
 		std::function<void(Entity)> DrawFnOverride = nullptr;
 	};
 
+	// Duplicate-entity copier; null for non-copyable registrations and for move-only component types.
+	template <typename T>
+	std::function<void(Entity, Entity)> MakeCopyFn(const bool copyable)
+	{
+		if constexpr (std::is_copy_constructible_v<T>)
+		{
+			if (copyable)
+			{
+				return [](Entity src, Entity dst)
+				{
+					if (src.HasComponent<T>())
+					{
+						dst.AddOrReplaceComponent<T>(src.GetComponent<T>());
+					}
+				};
+			}
+		}
+		return nullptr;
+	}
+
 	template <typename T>
 	void RegisterComponent(const ComponentRegisterOptions opts = {})
 	{
@@ -152,6 +173,12 @@ namespace Snowstorm
 		if (opts.DrawFnOverride)
 		{
 			DrawFn = opts.DrawFnOverride;
+		}
+		else if constexpr (!std::is_copy_constructible_v<T>)
+		{
+			// A move-only component (runtime twins holding a Scope<>) has no generic inspector: it is
+			// never drawn (DrawInEditor is false for those) and can't be edited through a working copy.
+			DrawFn = [](Entity) {};
 		}
 		else
 		{
@@ -246,13 +273,7 @@ namespace Snowstorm
 			    return rttr::instance(component);
 		    },
 
-		    .CopyFn = opts.Copyable ? std::function<void(Entity, Entity)>([](Entity src, Entity dst)
-		                                                               {
-				if (src.HasComponent<T>())
-				{
-					dst.AddOrReplaceComponent<T>(src.GetComponent<T>());
-				} })
-		                            : nullptr,
+		    .CopyFn = MakeCopyFn<T>(opts.Copyable),
 
 		    .RemoveFn = [](Entity entity)
 		    {

@@ -73,8 +73,8 @@ self-registers and is resolved once at startup by `CVarRegistry::Initialize(argc
 A CVar named `validation.extra` is set by env `SS_VALIDATION_EXTRA` **or** CLI `--validation.extra`
 (dots→`_`, uppercased, `SS_` prefix for env). Bools accept presence (`--flag`, or env set to
 anything but `0`/`false`/`off`/`no`). Run any executable with `--list-cvars` (or `--help`) to print
-every CVar with its value, type, env name, and description. Current CVars: `smoke.frames`,
-`validation.nonfatal`, `validation.extra`. Startup resolution is read-once (env → CLI), but CVars can now also
+every CVar with its value, type, env name, and description. Current CVars include `smoke.frames`,
+`validation.nonfatal`, `validation.extra`, `sim.fixed_hz` (run `--list-cvars` for all). Startup resolution is read-once (env → CLI), but CVars can now also
 be **edited live at runtime** from the editor's *Debug > Console Variables* panel (`CVarPanelSystem`):
 it lists every CVar with a type-appropriate widget (checkbox/int/float) plus a `name value` command
 line, via typed accessors on `ICVar` (`GetKind`/`Get*`/`Set*`). Most engine CVars are read per-frame
@@ -141,6 +141,15 @@ see, so treat it as part of the feature, not an afterthought.
   parallel-vs-serial decision *consciously* each time, not default to serial by habit. Note the current
   ceiling: the O(n) post-barrier change-mark (#91) caps end-to-end speedup at scale even when the
   compute parallelizes near-linearly — measure with `--ecs.benchmark` rather than assuming a win.
+- **Scripting (native):** `ScriptComponent{ClassName}` names a `ScriptableEntity` subclass registered
+  by a module (`SS_REGISTER_SCRIPT(Type)` in `RegisterTypes`; `ScriptRegistry`). `ScriptSystem` owns the
+  lifecycle (Unity MonoBehaviour order): on Edit→Play it creates `ScriptRuntimeComponent` instances
+  (`OnCreate`, then `OnStart` before the first `OnUpdate`), delivers `ScriptEventQueue` physics events
+  (`OnCollision*/OnTrigger*`) before the tick, and on Play→Edit runs `OnDestroy`. `World` guarantees
+  `OnDestroy` on entity destroy and scene clear. The **`FixedUpdate` phase** (between Logic and
+  AssetSync) is driven by a `SystemManager` accumulator at `sim.fixed_hz` (max 4 steps/frame; the
+  phase's systems see the fixed dt; `FixedAlpha()` for interpolation) — `ScriptFixedSystem` calls
+  `OnFixedUpdate`, the physics step goes there too. Example: `Snowstorm-Editor/.../Examples/Scripts/OrbitScript`.
 - **Rendering:** backend-agnostic interfaces in `Render/` (`RendererAPI`, `Renderer`, `Pipeline`,
   `Shader`, `Buffer`, `Texture`, `Material`, `RenderGraph`, ...). The concrete implementation lives
   in `Platform/Vulkan/` (volk + Vulkan Memory Allocator + spirv-reflect; shaders compiled to SPIR-V

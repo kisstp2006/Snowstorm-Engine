@@ -1,6 +1,7 @@
 #include "World.hpp"
 
 #include "Snowstorm/Components/HierarchyComponent.hpp"
+#include "Snowstorm/Components/ScriptRuntimeComponent.hpp"
 #include "Snowstorm/Components/TransformComponent.hpp"
 #include "Snowstorm/Math/Transform.hpp"
 
@@ -124,11 +125,32 @@ namespace Snowstorm
 		{
 			if (reg.valid(e))
 			{
+				NotifyScriptDestroyed(e);
 				UnlinkFromParent(e); // a surviving parent must not keep a dangling child link
 				reg.destroy(e);
 			}
 		}
 		m_PendingDestroy.clear();
+	}
+
+	void World::NotifyScriptDestroyed(const entt::entity e) const
+	{
+		// An entity never dies without its script's OnDestroy (Unity: OnDestroy on scene unload too).
+		auto& reg = m_SystemManager->GetRegistry();
+		if (auto* rt = reg.any_of<ScriptRuntimeComponent>(e) ? &reg.get<ScriptRuntimeComponent>(e) : nullptr; rt && rt->Instance)
+		{
+			rt->Instance->OnDestroy();
+			rt->Instance.reset();
+		}
+	}
+
+	void World::NotifyAllScriptsDestroyed() const
+	{
+		auto& reg = m_SystemManager->GetRegistry();
+		for (const auto view = reg.view<ScriptRuntimeComponent>(); const entt::entity e : view)
+		{
+			NotifyScriptDestroyed(e);
+		}
 	}
 
 	// ---------------------------------------------------------------------
@@ -331,11 +353,13 @@ namespace Snowstorm
 
 	void World::Clear() const
 	{
+		NotifyAllScriptsDestroyed();
 		m_SystemManager->GetRegistry().Clear();
 	}
 
 	void World::ClearSceneEntities() const
 	{
+		NotifyAllScriptsDestroyed(); // the persistent editor entities carry no scripts
 		m_SystemManager->GetRegistry().ClearExcept<DoNotSerializeComponent>();
 
 		// Advance the scene generation so temporal-history consumers (RenderSystem's TAA / neural upscaler)

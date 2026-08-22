@@ -17,6 +17,7 @@ namespace Snowstorm
 			static constexpr const char* deps[] = {"Core"};
 			return deps;
 		}
+		void RegisterTypes() override;
 		void RegisterServices(ServiceManager& services) override;
 		void RegisterWorld(World& world) override;
 	};

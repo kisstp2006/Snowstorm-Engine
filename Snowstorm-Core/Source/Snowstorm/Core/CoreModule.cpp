@@ -9,6 +9,7 @@
 #include "Snowstorm/Render/MeshLibrary.hpp"
 #include "Snowstorm/Render/RendererService.hpp"
 #include "Snowstorm/Render/Shader.hpp"
+#include "Snowstorm/Scripting/ScriptEvents.hpp"
 #include "Snowstorm/Service/ServiceManager.hpp"
 #include "Snowstorm/Systems/AssetLoadSystem.hpp"
 #include "Snowstorm/Systems/AssetWatchSystem.hpp"
@@ -49,6 +50,7 @@ namespace Snowstorm
 	void CoreModule::RegisterWorld(World& world)
 	{
 		auto& sm = world.GetSystemManager();
+		world.GetSingletonManager().RegisterSingleton<ScriptEventQueue>(); // physics -> script callbacks
 
 		sm.RegisterSystem<RuntimeInitSystem>(SystemPhase::Init);
 
@@ -57,6 +59,8 @@ namespace Snowstorm
 		sm.RegisterSystem<CameraControllerSystem>(SystemPhase::Logic);
 		sm.RegisterSystem<CameraPathSystem>(SystemPhase::Logic);
 		sm.RegisterSystem<RotatorSystem>(SystemPhase::Logic);
+
+		sm.RegisterSystem<ScriptFixedSystem>(SystemPhase::FixedUpdate); // OnFixedUpdate before the physics step
 
 		sm.RegisterSystem<AssetWatchSystem>(SystemPhase::AssetSync); // file changes -> re-import / hot reload
 		sm.RegisterSystem<ShaderReloadSystem>(SystemPhase::AssetSync);

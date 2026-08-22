@@ -117,6 +117,8 @@ namespace Snowstorm
 		WorldType m_Type = WorldType::Game;
 
 		void UnlinkFromParent(entt::entity child) const;
+		void NotifyScriptDestroyed(entt::entity e) const;
+		void NotifyAllScriptsDestroyed() const;
 		void SetDepthRecursive(entt::entity root, uint32_t depth) const;
 
 		// Bumped by ClearSceneEntities (which is const, so this is mutable). See SceneGeneration().

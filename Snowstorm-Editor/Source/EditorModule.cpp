@@ -1,6 +1,7 @@
 #include "EditorModule.hpp"
 
 #include "Examples/MandelbrotSet/MandelbrotControllerSystem.hpp"
+#include "Examples/Scripts/OrbitScript.hpp"
 #include "Service/ImGuiService.hpp"
 #include "Singletons/EditorHistorySingleton.hpp"
 #include "Singletons/EditorNotificationsSingleton.hpp"
@@ -20,6 +21,7 @@
 #include "System/ViewportResizeSystem.hpp"
 
 #include <Snowstorm/ECS/SystemManager.hpp>
+#include <Snowstorm/Scripting/ScriptRegistry.hpp>
 #include <Snowstorm/Service/ServiceManager.hpp>
 #include <Snowstorm/World/EditorHooksSingleton.hpp>
 #include <Snowstorm/World/SimulationStateSingleton.hpp>
@@ -27,6 +29,11 @@
 
 namespace Snowstorm
 {
+	void EditorModule::RegisterTypes()
+	{
+		SS_REGISTER_SCRIPT(OrbitScript); // example script, selectable in the ScriptComponent combo
+	}
+
 	void EditorModule::RegisterServices(ServiceManager& services)
 	{
 		services.RegisterService<ImGuiService>();

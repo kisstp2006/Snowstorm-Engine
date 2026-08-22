@@ -28,6 +28,7 @@ namespace Snowstorm::CVars
 	CVar<bool> FrameStats{"debug.frame_stats", false, "Log a once-per-second frame breakdown (total / GPU-wait / GPU-frame / CPU-submit)"};
 
 	CVar<bool> EcsParallel{"ecs.parallel", true, "Run data-parallel systems (System::ParallelForEach) across JobSystem workers (off = serial)"};
+	CVar<int> SimFixedHz{"sim.fixed_hz", 60, "Fixed simulation rate in Hz for the FixedUpdate phase (physics, OnFixedUpdate). The accumulator runs at most 4 steps per frame, so a stall clamps instead of spiralling.", CVarFlags::Persist};
 
 	CVar<int> StressRotators{"stress.rotators", 0, "Bare Transform+Rotator entities the stress bake spawns (heavy data-parallel ECS workload for the #85 benchmark)", CVarFlags::ReadOnly};
 

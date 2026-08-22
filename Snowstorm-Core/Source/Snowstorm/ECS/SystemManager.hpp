@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <string>
@@ -12,6 +13,7 @@
 #include "TrackedRegistry.hpp"
 
 #include "Snowstorm/Core/Base.hpp"
+#include "Snowstorm/Core/EngineCVars.hpp"
 #include "Snowstorm/Debug/Instrumentor.hpp"
 #include "Snowstorm/World/SimulationStateSingleton.hpp"
 
@@ -60,21 +62,50 @@ namespace Snowstorm
 			{
 				SS_PROFILE_SCOPE(SystemPhaseName(static_cast<SystemPhase>(i)));
 				const auto phaseStart = clock::now();
+
+				// FixedUpdate runs 0..kMaxFixedStepsPerFrame times at a fixed dt (Unity FixedUpdate / Godot
+				// _physics_process): the accumulator carries the remainder across frames, and a stall is
+				// clamped so the simulation never spirals. The phase's systems see the FIXED timestep.
+				int iterations = 1;
+				Timestep stepDt = ts;
+				if (static_cast<SystemPhase>(i) == SystemPhase::FixedUpdate)
+				{
+					const float fixedDt = 1.0f / static_cast<float>(std::max(1, CVars::SimFixedHz.Get()));
+					if (editMode || m_Phases[i].empty())
+					{
+						m_FixedAccumulator = 0.0f; // no simulation: don't bank time while paused in the editor
+						iterations = 0;
+					}
+					else
+					{
+						m_FixedAccumulator = std::min(m_FixedAccumulator + ts.GetSeconds(), fixedDt * static_cast<float>(kMaxFixedStepsPerFrame));
+						iterations = static_cast<int>(m_FixedAccumulator / fixedDt);
+						m_FixedAccumulator -= static_cast<float>(iterations) * fixedDt;
+						stepDt = Timestep{fixedDt};
+					}
+					m_FixedAlpha = m_FixedAccumulator / fixedDt;
+					m_FixedDt = fixedDt;
+				}
+
 				for (size_t j = 0; j < m_Phases[i].size(); ++j)
 				{
-					System& sys = *m_Phases[i][j];
-					if (editMode && !sys.RunsInEditMode())
+					m_Timings[i][j].second = 0.0f;
+				}
+				for (int step = 0; step < iterations; ++step)
+				{
+					for (size_t j = 0; j < m_Phases[i].size(); ++j)
 					{
-						m_Timings[i][j].second = 0.0f; // skipped this frame (Edit mode)
-						continue;
+						System& sys = *m_Phases[i][j];
+						if (editMode && !sys.RunsInEditMode())
+						{
+							continue; // skipped this frame (Edit mode)
+						}
+						SS_PROFILE_SCOPE(m_Timings[i][j].first.c_str());
+						const auto sysStart = clock::now();
+						sys.Execute(stepDt);
+						const auto sysEnd = clock::now();
+						m_Timings[i][j].second += std::chrono::duration<float, std::milli>(sysEnd - sysStart).count();
 					}
-					// Timeline event per system (profiler capture) alongside the always-on ms timing the
-					// Performance panel reads. Name comes from m_Timings (the reflected system type name).
-					SS_PROFILE_SCOPE(m_Timings[i][j].first.c_str());
-					const auto sysStart = clock::now();
-					sys.Execute(ts);
-					const auto sysEnd = clock::now();
-					m_Timings[i][j].second = std::chrono::duration<float, std::milli>(sysEnd - sysStart).count();
 				}
 				const auto phaseEnd = clock::now();
 				m_PhaseMs[i] = std::chrono::duration<float, std::milli>(phaseEnd - phaseStart).count();
@@ -84,6 +115,11 @@ namespace Snowstorm
 		}
 
 		TrackedRegistry& GetRegistry() { return m_Registry; }
+
+		// Fixed-step state for interpolation: the fraction of a fixed step banked after this frame's
+		// FixedUpdate (0..1) and the step length itself (a render-side system lerps prev->current by Alpha).
+		[[nodiscard]] float FixedAlpha() const { return m_FixedAlpha; }
+		[[nodiscard]] float FixedDeltaSeconds() const { return m_FixedDt; }
 
 		// Per-phase CPU time (ms) for the most recent ExecuteSystems call, indexed by SystemPhase.
 		[[nodiscard]] const std::array<float, static_cast<size_t>(SystemPhase::_Count)>& GetPhaseTimingsMs() const
@@ -105,5 +141,10 @@ namespace Snowstorm
 		std::array<std::vector<SystemTiming>, static_cast<size_t>(SystemPhase::_Count)> m_Timings;
 
 		const System::WorldRef m_World;
+
+		static constexpr int kMaxFixedStepsPerFrame = 4;
+		float m_FixedAccumulator = 0.0f;
+		float m_FixedAlpha = 0.0f;
+		float m_FixedDt = 1.0f / 60.0f;
 	};
 }

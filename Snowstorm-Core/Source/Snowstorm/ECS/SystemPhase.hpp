@@ -11,8 +11,9 @@ namespace Snowstorm
 	enum class SystemPhase : uint8_t
 	{
 		Init,      // one-time / lifecycle resolve (e.g. RuntimeInitSystem)
-		Logic,     // scripts, input-driven controllers
-		AssetSync, // hot-reload, shader/asset watchers
+		Logic,       // scripts, input-driven controllers
+		FixedUpdate, // fixed-step simulation (physics, OnFixedUpdate) — run 0..N times per frame by an accumulator
+		AssetSync,   // hot-reload, shader/asset watchers
 		UI,        // editor / ImGui systems — EMPTY in a packaged runtime
 		Resolve,   // turn handles into runtime resources (mesh / material / camera)
 		PreRender, // lighting, visibility / culling, pre-draw controllers
@@ -30,6 +31,8 @@ namespace Snowstorm
 			return "Init";
 		case SystemPhase::Logic:
 			return "Logic";
+		case SystemPhase::FixedUpdate:
+			return "FixedUpdate";
 		case SystemPhase::AssetSync:
 			return "AssetSync";
 		case SystemPhase::UI:

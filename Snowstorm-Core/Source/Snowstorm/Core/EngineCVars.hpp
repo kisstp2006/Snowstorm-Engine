@@ -56,6 +56,9 @@ namespace Snowstorm::CVars
 	// kill-switch if a parallel path ever misbehaves.
 	extern CVar<bool> EcsParallel;
 
+	// Fixed simulation rate (Hz) for the FixedUpdate phase: physics steps and script OnFixedUpdate.
+	extern CVar<int> SimFixedHz;
+
 	// Number of bare Transform+Rotator entities the stress bake ("scene.bake stress") spawns, on top of
 	// the renderable fields. These carry no mesh/material, so they load only RotatorSystem's per-entity
 	// loop — the heavy, pure workload for the parallel-ECS before/after benchmark (#85). 0 (default) = none.

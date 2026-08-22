@@ -3,6 +3,7 @@
 #include "Snowstorm/Components/IDComponent.hpp"
 #include "Snowstorm/Math/Math.hpp"
 #include "Snowstorm/Math/Transform.hpp"
+#include "Snowstorm/Scripting/ScriptRegistry.hpp"
 #include "Snowstorm/Utility/JsonUtils.hpp"
 #include "Snowstorm/Utility/UUID.hpp"
 #include "Snowstorm/World/EditorHooksSingleton.hpp"
@@ -495,7 +496,28 @@ namespace Snowstorm
 			return false;
 		}
 
-		if (type == rttr::type::get<std::string>())
+		if (type == rttr::type::get<std::string>() && prop.get_metadata("ScriptClass").is_valid())
+		{
+			// A script class name: pick from the registered scripts (plus "(none)"), never free text.
+			std::string val = value.get_value<std::string>();
+			LabelLeft(name.c_str());
+			if (ImGui::BeginCombo(hidden.c_str(), val.empty() ? "(none)" : val.c_str()))
+			{
+				if (ImGui::Selectable("(none)", val.empty()))
+				{
+					propChanged = prop.set_value(instance, std::string{});
+				}
+				for (const std::string& scriptName : ScriptRegistry::Names())
+				{
+					if (ImGui::Selectable(scriptName.c_str(), scriptName == val))
+					{
+						propChanged = prop.set_value(instance, scriptName);
+					}
+				}
+				ImGui::EndCombo();
+			}
+		}
+		else if (type == rttr::type::get<std::string>())
 		{
 			std::string val = value.get_value<std::string>();
 			LabelLeft(name.c_str());
