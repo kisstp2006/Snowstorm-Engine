@@ -83,6 +83,7 @@ version to the one vcpkg builds with — if Visual Studio updates, bump it in `C
 | Project | Output | Description |
 | --- | --- | --- |
 | **Snowstorm-Core** | static library | All engine code: platform-independent under `Source/Snowstorm/`, backend under `Source/Platform/` (Vulkan, Windows). |
+| **Snowstorm-Physics-Jolt** | static library | Physics module: Jolt Physics bound to the ECS (rigid bodies, colliders, fixed-step simulation). |
 | **Snowstorm-Editor** | executable | The editor (ImGui dockspace, hierarchy, viewport); default startup project. |
 | **Snowstorm-Runtime** | executable | Editor-free player: runs the same systems without tooling and blits the primary camera to the swapchain. |
 | **Snowstorm-Tests** | executable | Catch2 unit tests (run via CTest). |

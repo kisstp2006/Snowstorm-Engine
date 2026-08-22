@@ -22,16 +22,22 @@ namespace Snowstorm
 	class SystemManager final : public NonCopyable
 	{
 	public:
+		using SystemTiming = std::pair<std::string, float>;
+
 		explicit SystemManager(const System::WorldRef world)
 		    : m_World(world)
 		{
 		}
 
+		// `order` sorts systems within a phase (stable: equal orders keep registration order, so Core's
+		// systems stay in their listed sequence and a module's default-0 systems append after them). A
+		// negative order runs before Core's (e.g. the physics write-back before TransformSystem) — the
+		// small version of Unity's OrderBefore/OrderAfter.
 		template <typename T, typename... Args>
-		void RegisterSystem(const SystemPhase phase, Args&&... args)
+		void RegisterSystemOrdered(const SystemPhase phase, const int order, Args&&... args)
 		{
 			static_assert(std::is_base_of_v<System, T>, "T must inherit from System");
-			m_Phases[static_cast<size_t>(phase)].emplace_back(CreateScope<T>(m_World, std::forward<Args>(args)...));
+			const size_t p = static_cast<size_t>(phase);
 
 			// Friendly name for the profiler: strip the leading "class Snowstorm::" MSVC prefix.
 			std::string name = typeid(T).name();
@@ -39,7 +45,27 @@ namespace Snowstorm
 			{
 				name = name.substr(pos + 1);
 			}
-			m_Timings[static_cast<size_t>(phase)].emplace_back(std::move(name), 0.0f);
+
+			// Insert before the first system with a greater order (stable).
+			size_t at = m_Phases[p].size();
+			for (size_t i = 0; i < m_Orders[p].size(); ++i)
+			{
+				if (m_Orders[p][i] > order)
+				{
+					at = i;
+					break;
+				}
+			}
+			const auto offset = static_cast<std::ptrdiff_t>(at);
+			m_Phases[p].insert(m_Phases[p].begin() + offset, CreateScope<T>(m_World, std::forward<Args>(args)...));
+			m_Orders[p].insert(m_Orders[p].begin() + offset, order);
+			m_Timings[p].insert(m_Timings[p].begin() + offset, SystemTiming{std::move(name), 0.0f});
+		}
+
+		template <typename T, typename... Args>
+		void RegisterSystem(const SystemPhase phase, Args&&... args)
+		{
+			RegisterSystemOrdered<T>(phase, 0, std::forward<Args>(args)...);
 		}
 
 		void ExecuteSystems(const Timestep ts)
@@ -128,7 +154,6 @@ namespace Snowstorm
 		}
 
 		// Per-system (name, ms) for the most recent frame, grouped by phase (same order as execution).
-		using SystemTiming = std::pair<std::string, float>;
 		[[nodiscard]] const std::array<std::vector<SystemTiming>, static_cast<size_t>(SystemPhase::_Count)>& GetSystemTimingsMs() const
 		{
 			return m_Timings;
@@ -137,6 +162,7 @@ namespace Snowstorm
 	private:
 		TrackedRegistry m_Registry;
 		std::array<std::vector<Scope<System>>, static_cast<size_t>(SystemPhase::_Count)> m_Phases;
+		std::array<std::vector<int>, static_cast<size_t>(SystemPhase::_Count)> m_Orders;
 		std::array<float, static_cast<size_t>(SystemPhase::_Count)> m_PhaseMs{};
 		std::array<std::vector<SystemTiming>, static_cast<size_t>(SystemPhase::_Count)> m_Timings;
 

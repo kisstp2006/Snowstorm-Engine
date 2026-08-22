@@ -9,6 +9,7 @@
 #include "Snowstorm/Components/RenderTargetComponent.hpp"
 #include "Snowstorm/Components/TransformComponent.hpp"
 #include "Snowstorm/Components/WorldTransformComponent.hpp"
+#include "Snowstorm/Debug/DebugDrawSingleton.hpp"
 #include "Snowstorm/Math/Transform.hpp"
 #include "Snowstorm/Components/ViewportComponent.hpp"
 #include "Snowstorm/Components/ViewportInteractionComponent.hpp"
@@ -687,6 +688,23 @@ namespace Snowstorm
 			// light is drawn brighter/thicker so it stands out. Drawn here, inside the per-viewport block,
 			// so camRt/imageStart/vp are in scope.
 			DrawLightGizmos(reg, camRt.ViewProjection, imageStart, ImVec2{vp.Size.x, vp.Size.y}, selection.Selected);
+
+			// ---- Debug lines (DebugDrawSingleton: physics collider wireframes, anything a system pushed):
+			// the same projected 2D overlay. Producers clear + refill the list once per frame.
+			if (m_World->HasSingleton<DebugDrawSingleton>())
+			{
+				ImDrawList* dl = ImGui::GetWindowDrawList();
+				const ImVec2 rectSize{vp.Size.x, vp.Size.y};
+				for (const auto& line : SingletonView<DebugDrawSingleton>().Lines())
+				{
+					ImVec2 a, b;
+					if (WorldToScreen(line.A, camRt.ViewProjection, imageStart, rectSize, a) &&
+					    WorldToScreen(line.B, camRt.ViewProjection, imageStart, rectSize, b))
+					{
+						dl->AddLine(a, b, line.ColorABGR, 1.0f);
+					}
+				}
+			}
 		}
 
 		// ---- Play/Stop toolbar: a top-CENTER floating overlay (UE5 places play controls at the top of the

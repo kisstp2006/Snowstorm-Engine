@@ -16,7 +16,11 @@
     "entt",
     {
       "name": "imgui",
-      "features": [ "vulkan-binding", "glfw-binding", "docking-experimental" ]
+      "features": [
+        "vulkan-binding",
+        "glfw-binding",
+        "docking-experimental"
+      ]
     },
     "imguizmo",
     "rttr",
@@ -26,6 +30,12 @@
     "spirv-reflect",
     "nlohmann-json",
     "catch2",
-    "tracy"
+    "tracy",
+    {
+      "name": "joltphysics",
+      "features": [
+        "debugrenderer"
+      ]
+    }
   ]
 }

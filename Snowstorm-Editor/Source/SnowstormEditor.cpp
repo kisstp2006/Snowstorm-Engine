@@ -6,6 +6,7 @@
 #include "EditorModule.hpp"
 
 #include <Snowstorm/Core/CoreModule.hpp>
+#include <SnowstormPhysics/PhysicsJoltModule.hpp>
 
 namespace Snowstorm
 {
@@ -13,7 +14,7 @@ namespace Snowstorm
 	{
 	public:
 		SnowstormEditor()
-		    : Application("Snowstorm-Editor", Modules<CoreModule, EditorModule>())
+		    : Application("Snowstorm-Editor", Modules<CoreModule, PhysicsJoltModule, EditorModule>())
 		{
 
 			PushLayer(new EditorLayer());

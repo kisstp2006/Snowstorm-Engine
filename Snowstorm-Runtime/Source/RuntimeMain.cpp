@@ -4,6 +4,7 @@
 #include "RuntimeLayer.hpp"
 
 #include <Snowstorm/Core/CoreModule.hpp>
+#include <SnowstormPhysics/PhysicsJoltModule.hpp>
 
 namespace Snowstorm
 {
@@ -13,7 +14,7 @@ namespace Snowstorm
 	{
 	public:
 		SnowstormRuntime()
-		    : Application("Snowstorm-Runtime", Modules<CoreModule>())
+		    : Application("Snowstorm-Runtime", Modules<CoreModule, PhysicsJoltModule>())
 		{
 			PushLayer(new RuntimeLayer());
 		}

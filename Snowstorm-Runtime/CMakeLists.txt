@@ -30,6 +30,7 @@ target_include_directories(Snowstorm-Runtime PUBLIC
 # those TUs instead of dropping the unreferenced ones (see Snowstorm-Editor/CMakeLists.txt).
 target_link_libraries(Snowstorm-Runtime PUBLIC
     $<LINK_LIBRARY:WHOLE_ARCHIVE,Snowstorm-Core>
+    $<LINK_LIBRARY:WHOLE_ARCHIVE,Snowstorm-Physics-Jolt>
 )
 
 # Copy dependent runtime DLLs next to the exe (see Snowstorm-Editor/CMakeLists.txt for the rationale).

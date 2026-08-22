@@ -17,6 +17,7 @@ endif()
 # 1. Add subdirectories for core and the executables
 # This must happen before setting target properties
 add_subdirectory(Snowstorm-Core)
+add_subdirectory(Snowstorm-Physics-Jolt)
 add_subdirectory(Snowstorm-Editor)
 add_subdirectory(Snowstorm-Runtime)
 

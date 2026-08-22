@@ -33,7 +33,8 @@ find_package(imguizmo CONFIG REQUIRED)
 # (RTTR_REGISTRATION + AUTO_REGISTER_COMPONENT). The linker drops object files nothing references,
 # which would silently skip those initializers — so link Core WHOLE_ARCHIVE to keep every TU.
 target_link_libraries(Snowstorm-Editor PUBLIC
-    $<LINK_LIBRARY:WHOLE_ARCHIVE,Snowstorm-Core>  # keep self-registration TUs (see note above)
+    $<LINK_LIBRARY:WHOLE_ARCHIVE,Snowstorm-Core>          # keep self-registration TUs (see note above)
+    $<LINK_LIBRARY:WHOLE_ARCHIVE,Snowstorm-Physics-Jolt>  # same for the physics module
     imguizmo::imguizmo
 )
 

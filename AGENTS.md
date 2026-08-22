@@ -87,6 +87,7 @@ config-file source is still a planned follow-up.
 Snowstorm-Core/      # STATIC library: all engine code (the only place most work happens)
   Source/Snowstorm/  #   platform-independent engine (Core, ECS, Render, Systems, ...)
   Source/Platform/   #   Vulkan/ (RHI implementation, ~28 files) and Windows/
+Snowstorm-Physics-Jolt/ # STATIC module lib: Jolt Physics bound to the ECS (IModule "PhysicsJolt")
 Snowstorm-Editor/    # Editor EXECUTABLE — links Core; ImGui dockspace, panels, viewport
 Snowstorm-Runtime/   # Editor-free runtime EXECUTABLE — links Core; assembled from {Core} modules only
 Assets/              # Shaders, Meshes, Materials, Scenes, Textures (loaded at runtime)
@@ -150,6 +151,23 @@ see, so treat it as part of the feature, not an afterthought.
   AssetSync) is driven by a `SystemManager` accumulator at `sim.fixed_hz` (max 4 steps/frame; the
   phase's systems see the fixed dt; `FixedAlpha()` for interpolation) — `ScriptFixedSystem` calls
   `OnFixedUpdate`, the physics step goes there too. Example: `Snowstorm-Editor/.../Examples/Scripts/OrbitScript`.
+- **Physics (Jolt, `Snowstorm-Physics-Jolt/`):** the first real module — ezEngine JoltPlugin / Godot 4
+  Jolt shape. Authored components `RigidBodyComponent` + `Box/Sphere/Capsule/MeshColliderComponent`
+  (several on one entity and on child entities fold into ONE `StaticCompoundShape`; a collider with no
+  RigidBody above is its own static body); runtime twin `PhysicsBodyRuntimeComponent{BodyID, Shape,
+  AuthoredHash}` rebuilt when the authored hash (settings, colliders, world scale) moves.
+  `PhysicsWorldSingleton` = one `JPH::PhysicsSystem` per World (layers: bit 8 moving/static for the
+  broad phase, low 5 bits = a 32×32 collision matrix row, `SetLayersCollide`), contact listener →
+  `ScriptEventQueue`. Systems: `PhysicsWriteBackSystem` (Resolve, order −10, BEFORE TransformSystem:
+  simulated world pose → local transform, interpolated by `FixedAlpha` when `Interpolate`),
+  `PhysicsBodySyncSystem` (Resolve, +10, runs in Edit mode too so colliders exist for debug draw),
+  `PhysicsStepSystem` (FixedUpdate, after `ScriptFixedSystem`; `JoltJobSystem` runs Jolt's jobs on the
+  engine's one `JobSystem` pool, single-threaded fallback without an Application),
+  `PhysicsDebugDrawSystem` (PreRender, `physics.debug_draw` → `DebugDrawSingleton` lines the editor
+  viewport overlays). `physics.log_stats` logs bodies/active/contacts per 60 steps — the headless
+  diagnostic. Jolt's `JPH_*` config comes from the vcpkg port's exported `Jolt::Jolt` target (ABI must
+  match: never define them by hand). Deliberately deferred: character controller, constraints,
+  raycast script API, a cooked `.ssphys` shape cache, collision-matrix persistence in the project file.
 - **Rendering:** backend-agnostic interfaces in `Render/` (`RendererAPI`, `Renderer`, `Pipeline`,
   `Shader`, `Buffer`, `Texture`, `Material`, `RenderGraph`, ...). The concrete implementation lives
   in `Platform/Vulkan/` (volk + Vulkan Memory Allocator + spirv-reflect; shaders compiled to SPIR-V
@@ -193,7 +211,7 @@ see, so treat it as part of the feature, not an afterthought.
 
 assimp, EnTT, fmt, glew, glfw3, glm, imgui (vulkan+glfw bindings, docking), imguizmo, rttr,
 spdlog, stb, Vulkan SDK + validation layers, vulkan-memory-allocator, gli, volk, spirv-reflect,
-nlohmann-json, catch2, tracy. The canonical list is the root `vcpkg.json` manifest; the linkage is
+nlohmann-json, catch2, tracy, joltphysics (`debugrenderer` feature). The canonical list is the root `vcpkg.json` manifest; the linkage is
 in `Snowstorm-Core/CMakeLists.txt`. Keep those two in sync when adding a dependency.
 
 ## Git hygiene

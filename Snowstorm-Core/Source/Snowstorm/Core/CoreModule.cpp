@@ -2,6 +2,7 @@
 
 #include "Snowstorm/Core/FileWatcher.hpp"
 #include "Snowstorm/Core/JobSystem.hpp"
+#include "Snowstorm/Debug/DebugDrawSingleton.hpp"
 #include "Snowstorm/ECS/SystemManager.hpp"
 #include "Snowstorm/ECS/SystemPhase.hpp"
 #include "Snowstorm/Lighting/EnvironmentSystem.hpp"
@@ -51,6 +52,7 @@ namespace Snowstorm
 	{
 		auto& sm = world.GetSystemManager();
 		world.GetSingletonManager().RegisterSingleton<ScriptEventQueue>(); // physics -> script callbacks
+		world.GetSingletonManager().RegisterSingleton<DebugDrawSingleton>(); // immediate-mode debug lines
 
 		sm.RegisterSystem<RuntimeInitSystem>(SystemPhase::Init);
 

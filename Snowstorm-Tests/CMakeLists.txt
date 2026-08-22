@@ -36,6 +36,7 @@ find_package(Catch2 CONFIG REQUIRED)
 # component self-registration static initializers run (SceneSerializer round-trip needs the reflection).
 target_link_libraries(Snowstorm-Tests PRIVATE
     $<LINK_LIBRARY:WHOLE_ARCHIVE,Snowstorm-Core>
+    $<LINK_LIBRARY:WHOLE_ARCHIVE,Snowstorm-Physics-Jolt>
     Catch2::Catch2WithMain
 )
 

@@ -339,6 +339,234 @@
       },
       "Name": "Spot Light",
       "UUID": "8412553097614238002"
+    },
+    {
+      "UUID": "7788990011223344001",
+      "Name": "Physics Floor",
+      "Components": {
+        "Snowstorm::TransformComponent": {
+          "Position": [
+            0.0,
+            -2.0,
+            0.0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "Scale": [
+            10.0,
+            0.25,
+            10.0
+          ]
+        },
+        "Snowstorm::MeshComponent": {
+          "Mesh": "5810267832183663728"
+        },
+        "Snowstorm::MaterialComponent": {
+          "Material": "14863079243352112687"
+        },
+        "Snowstorm::VisibilityComponent": {
+          "Mask": 3
+        },
+        "Snowstorm::BoxColliderComponent": {
+          "HalfExtents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "Offset": [
+            0,
+            0,
+            0
+          ]
+        },
+        "Snowstorm::RigidBodyComponent": {
+          "Motion": "Static",
+          "Mass": 1.0,
+          "Friction": 0.6,
+          "Restitution": 0.0,
+          "LinearDamping": 0.05,
+          "AngularDamping": 0.05,
+          "GravityFactor": 1.0,
+          "IsTrigger": false,
+          "CollisionLayer": 0,
+          "Interpolate": true
+        }
+      }
+    },
+    {
+      "UUID": "7788990011223344010",
+      "Name": "Falling Cube 1",
+      "Components": {
+        "Snowstorm::TransformComponent": {
+          "Position": [
+            0.3,
+            4.0,
+            0.2
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "Scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "Snowstorm::MeshComponent": {
+          "Mesh": "5810267832183663728"
+        },
+        "Snowstorm::MaterialComponent": {
+          "Material": "14863079243352112687"
+        },
+        "Snowstorm::VisibilityComponent": {
+          "Mask": 3
+        },
+        "Snowstorm::BoxColliderComponent": {
+          "HalfExtents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "Offset": [
+            0,
+            0,
+            0
+          ]
+        },
+        "Snowstorm::RigidBodyComponent": {
+          "Motion": "Dynamic",
+          "Mass": 1.0,
+          "Friction": 0.5,
+          "Restitution": 0.1,
+          "LinearDamping": 0.05,
+          "AngularDamping": 0.05,
+          "GravityFactor": 1.0,
+          "IsTrigger": false,
+          "CollisionLayer": 0,
+          "Interpolate": true
+        }
+      }
+    },
+    {
+      "UUID": "7788990011223344011",
+      "Name": "Falling Cube 2",
+      "Components": {
+        "Snowstorm::TransformComponent": {
+          "Position": [
+            -1.2,
+            5.5,
+            0.8
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "Scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "Snowstorm::MeshComponent": {
+          "Mesh": "5810267832183663728"
+        },
+        "Snowstorm::MaterialComponent": {
+          "Material": "14863079243352112687"
+        },
+        "Snowstorm::VisibilityComponent": {
+          "Mask": 3
+        },
+        "Snowstorm::BoxColliderComponent": {
+          "HalfExtents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "Offset": [
+            0,
+            0,
+            0
+          ]
+        },
+        "Snowstorm::RigidBodyComponent": {
+          "Motion": "Dynamic",
+          "Mass": 1.0,
+          "Friction": 0.5,
+          "Restitution": 0.1,
+          "LinearDamping": 0.05,
+          "AngularDamping": 0.05,
+          "GravityFactor": 1.0,
+          "IsTrigger": false,
+          "CollisionLayer": 0,
+          "Interpolate": true
+        }
+      }
+    },
+    {
+      "UUID": "7788990011223344012",
+      "Name": "Falling Cube 3",
+      "Components": {
+        "Snowstorm::TransformComponent": {
+          "Position": [
+            1.1,
+            7.0,
+            -0.9
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "Scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "Snowstorm::MeshComponent": {
+          "Mesh": "5810267832183663728"
+        },
+        "Snowstorm::MaterialComponent": {
+          "Material": "14863079243352112687"
+        },
+        "Snowstorm::VisibilityComponent": {
+          "Mask": 3
+        },
+        "Snowstorm::BoxColliderComponent": {
+          "HalfExtents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "Offset": [
+            0,
+            0,
+            0
+          ]
+        },
+        "Snowstorm::RigidBodyComponent": {
+          "Motion": "Dynamic",
+          "Mass": 1.0,
+          "Friction": 0.5,
+          "Restitution": 0.1,
+          "LinearDamping": 0.05,
+          "AngularDamping": 0.05,
+          "GravityFactor": 1.0,
+          "IsTrigger": false,
+          "CollisionLayer": 0,
+          "Interpolate": true
+        }
+      }
     }
   ],
   "Scene": {
