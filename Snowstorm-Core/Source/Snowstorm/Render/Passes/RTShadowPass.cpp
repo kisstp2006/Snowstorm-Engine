@@ -42,10 +42,11 @@ namespace Snowstorm
 			uint32_t RayCount = 1;
 			uint32_t ReflGeoTableAddrHi = 0; // geometry table device address (hi)
 
-			uint32_t UseLogWeight = 1; // log(1+luma) perceptual importance weight; 0 = linear luma
-			uint32_t _Pad4 = 0;
-			uint32_t _Pad5 = 0;
-			uint32_t _Pad6 = 0;
+			uint32_t UseLogWeight = 1;      // log(1+luma) perceptual importance weight; 0 = linear luma
+			glm::vec3 CameraPosition{0.0f}; // world-space camera pos for V = normalize(camPos - worldPos) in the specular BRDF
+
+			uint32_t UseSpecImportance = 1; // combined diffuse+spec RIS target; 0 = diffuse-only importance
+			glm::vec3 _PadSpecImp{0.0f};    // pad to a 16-byte row (matches Shadow.comp.hlsl)
 
 			// Option B (colored diffuse): the pass now accumulates COLORED shadowed irradiance, so each light
 			// carries its full RGB radiance (color*intensity), not just a luma weight. Importance weight = luma
@@ -65,6 +66,8 @@ namespace Snowstorm
 		constexpr uint32_t kSamplerBinding = 2; // wrapping sampler for the cutout alpha lookup
 		constexpr uint32_t kParamsBinding = 3;
 		constexpr uint32_t kDepthBinding = 4;
+		constexpr uint32_t kShadingNormalBinding = 5; // normal-mapped normal for NdotL + specular BRDF (matches DefaultLit)
+		constexpr uint32_t kSpecOutputBinding = 6;    // demodulated shadowed specular UAV
 	}
 
 	void RTShadowPass::EnsureResources()
@@ -113,11 +116,12 @@ namespace Snowstorm
 	void RTShadowPass::Dispatch(const Ref<CommandContext>& ctx, const uint32_t frameIndex, const glm::mat4& invViewProj,
 	                            const LightDataBlock& lights, const float normalBias, const uint32_t frameCounter,
 	                            const bool soft, const float sunTanAngular, const float sourceRadius,
-	                            const uint32_t rayCount, const uint64_t tableAddr, const Ref<TextureView>& gbuffer,
-	                            const Ref<TextureView>& depth, const Ref<TextureView>& output, const uint32_t outW,
-	                            const uint32_t outH)
+	                            const uint32_t rayCount, const uint64_t tableAddr, const glm::vec3& cameraPosition,
+	                            const Ref<TextureView>& gbuffer, const Ref<TextureView>& shadingNormal,
+	                            const Ref<TextureView>& depth, const Ref<TextureView>& output,
+	                            const Ref<TextureView>& specOutput, const uint32_t outW, const uint32_t outH)
 	{
-		if (!ctx || !gbuffer || !depth || !output || outW == 0 || outH == 0)
+		if (!ctx || !gbuffer || !shadingNormal || !depth || !output || !specOutput || outW == 0 || outH == 0)
 		{
 			return;
 		}
@@ -139,7 +143,9 @@ namespace Snowstorm
 		cb.RayCount = rayCount;
 		cb.ReflGeoTableAddrLo = static_cast<uint32_t>(tableAddr & 0xFFFFFFFFull); // cutout any-hit alpha test
 		cb.ReflGeoTableAddrHi = static_cast<uint32_t>(tableAddr >> 32);
-		cb.UseLogWeight = CVars::ShadowImportanceLog.Get() ? 1u : 0u; // perceptual light-importance weight (MegaLights)
+		cb.UseLogWeight = CVars::ShadowImportanceLog.Get() ? 1u : 0u;           // perceptual light-importance weight (MegaLights)
+		cb.CameraPosition = cameraPosition;                                     // for V in the demodulated specular BRDF
+		cb.UseSpecImportance = CVars::ShadowImportanceSpecular.Get() ? 1u : 0u; // combined diffuse+spec RIS target
 
 		// Directional: every directional light is a shadow-caster in the RT path (matches DefaultLit, where the
 		// sun casts). dir TO light = -Direction. Weight = luma(color) * intensity, no attenuation.
@@ -192,8 +198,10 @@ namespace Snowstorm
 			m_Sets[frameIndex] = DescriptorSet::Create(layouts[0], dsd);
 		}
 		m_Sets[frameIndex]->SetTexture(kGBufferBinding, gbuffer);
+		m_Sets[frameIndex]->SetTexture(kShadingNormalBinding, shadingNormal);
 		m_Sets[frameIndex]->SetTexture(kDepthBinding, depth);
 		m_Sets[frameIndex]->SetTexture(kOutputBinding, output);
+		m_Sets[frameIndex]->SetTexture(kSpecOutputBinding, specOutput);
 		m_Sets[frameIndex]->SetSampler(kSamplerBinding, m_Sampler); // cutout alpha lookup
 		const BufferBinding cbBB{.Buffer = m_ParamBuffers[frameIndex], .Offset = 0, .Range = sizeof(ShadowCB)};
 		m_Sets[frameIndex]->SetBuffer(kParamsBinding, cbBB);
