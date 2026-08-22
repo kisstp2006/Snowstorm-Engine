@@ -14,6 +14,7 @@
 #include "Snowstorm/World/Entity.hpp"
 #include "Snowstorm/Input/InputStateSingleton.hpp"
 #include "Snowstorm/Assets/AssetManagerSingleton.hpp"
+#include "Snowstorm/Core/EnginePaths.hpp"
 #include "Snowstorm/Project/Project.hpp"
 #include "Snowstorm/Utility/FileDialog.hpp"
 #include "Singletons/EditorNotificationsSingleton.hpp"
@@ -167,6 +168,13 @@ namespace Snowstorm
 						const bool ok = cmds.SaveProject();
 						notify.Push(ok ? "Project saved" : "Save failed", ok ? EditorToastType::Success : EditorToastType::Error);
 					}
+				}
+
+				// Back to the project manager the editor boots into (Godot's "Quit to Project List").
+				// Saves the project file, not the scene — Ctrl+S first if the scene matters.
+				if (ImGui::MenuItem("Close Project", nullptr, false, static_cast<bool>(cmds.CloseProject)))
+				{
+					cmds.CloseProject();
 				}
 
 				ImGui::Separator();
@@ -563,6 +571,13 @@ namespace Snowstorm
 	{
 		if (m_ShowNewProjectPopup)
 		{
+			// Same pre-filled default location as the project manager's dialog (see
+			// EnginePaths::DefaultProjectsDirectory); only when empty, so a cancelled edit survives.
+			if (m_NewProjectLocationBuffer[0] == '\0')
+			{
+				const std::string defaultLocation = EnginePaths::DefaultProjectsDirectory().string();
+				strncpy_s(m_NewProjectLocationBuffer, defaultLocation.c_str(), sizeof(m_NewProjectLocationBuffer) - 1);
+			}
 			ImGui::OpenPopup("New Project");
 			m_ShowNewProjectPopup = false;
 		}

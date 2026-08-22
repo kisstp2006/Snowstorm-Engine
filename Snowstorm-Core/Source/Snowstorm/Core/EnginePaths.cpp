@@ -77,6 +77,10 @@ namespace Snowstorm::EnginePaths
 	}
 	std::filesystem::path DefaultProjectFile()
 	{
-		return Root() / "Projects" / "Sandbox" / "Sandbox.ssproj";
+		return DefaultProjectsDirectory() / "Sandbox" / "Sandbox.ssproj";
+	}
+	std::filesystem::path DefaultProjectsDirectory()
+	{
+		return Root() / "Projects";
 	}
 }

@@ -16,4 +16,9 @@ namespace Snowstorm::EnginePaths
 	// caller fails loud instead of synthesizing one. Keeps the headless harnesses (smoke, perf-bench,
 	// metrics) zero-config, the way Unreal falls back to the .uproject next to the binary.
 	[[nodiscard]] std::filesystem::path DefaultProjectFile();
+
+	// Where projects live by default: the folder DefaultProjectFile() sits in, and what the editor's
+	// "New Project" dialog pre-fills as the location. One place decides this, so the picker's dialog and
+	// the File-menu one can't drift. Unreal pre-fills a fixed projects folder the same way.
+	[[nodiscard]] std::filesystem::path DefaultProjectsDirectory();
 }

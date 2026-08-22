@@ -143,13 +143,13 @@ namespace Snowstorm::CVars
 	[[nodiscard]] bool IsUnattended();
 
 	// Explicit .ssproj to boot. EMPTY (default) is the "none requested" sentinel, matching StartupScene below —
-	// only then may the editor fall back to its recent-project list / the picker. Anything that needs a project
-	// when this is empty (Runtime, unattended editor runs) resolves EnginePaths::DefaultProjectFile().
+	// only then does the editor open its project manager. Anything that needs a project when this is empty
+	// (Runtime, unattended editor runs) resolves EnginePaths::DefaultProjectFile().
 	extern CVar<std::string> StartupProject;
 
-	// Force the editor's project picker instead of auto-opening the most recent project. Interactive-only:
-	// IsUnattended() runs ignore it (a picker nobody can click is a hang, not a prompt).
-	extern CVar<bool> ForceProjectPicker;
+	// Skip the project manager and reopen the most recent project instead. Interactive-only: IsUnattended()
+	// runs never show a picker anyway (one nobody can click is a hang, not a prompt).
+	extern CVar<bool> ReopenLastProject;
 
 	// Override the scene loaded at startup (path to a .world). Empty (default) uses the active project's
 	// StartScene. Lets the smoke harness boot any scene headlessly — e.g. load Sponza to exercise

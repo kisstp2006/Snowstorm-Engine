@@ -43,6 +43,10 @@ namespace Snowstorm
 		// deferral pattern as RequestSceneLoad.
 		void RequestProjectOpen(const std::filesystem::path& ssprojPath);
 
+		// Queue "close the project and go back to the project manager" for the next frame boundary —
+		// deferred for the same reason as RequestProjectOpen (it drops the World the caller lives in).
+		void RequestReturnToProjectManager();
+
 		// Bind everything a freshly-created m_ActiveWorld needs against the CURRENTLY active Project:
 		// asset registry, inspector resolver hooks (SetAssetNameResolver/SetAssetListProvider — these
 		// capture the World by raw pointer, so they must be re-bound whenever m_ActiveWorld changes),
@@ -76,6 +80,11 @@ namespace Snowstorm
 		void CreateMainViewportEntity();
 
 		void CreateDemoEntities() const;
+
+		// The scene a project starts life with when it has none: a single directional light. Deliberately
+		// references no asset — a fresh project's asset folders are empty, and CreateDemoEntities imports
+		// the BUNDLED project's meshes/materials/textures, which would resolve to nothing anywhere else.
+		void CreateStarterSceneEntities() const;
 		void CreateCameraEntities() const;
 
 		// Per-scene editor camera viewpoint, stored as editor-only metadata in a "<scene>.editor" sidecar
@@ -118,6 +127,7 @@ namespace Snowstorm
 		// system that requested it while it is still on the call stack.
 		std::filesystem::path m_PendingProjectPath;
 		bool m_HasPendingProject = false;
+		bool m_HasPendingProjectClose = false; // File > Close Project: back to the project manager
 
 		// "New Scene" requested from a UI system. Deferred like a scene open: clearing the scene
 		// destroys GPU resources the in-progress frame's render pass still binds.

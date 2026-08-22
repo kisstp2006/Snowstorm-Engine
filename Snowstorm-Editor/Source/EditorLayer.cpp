@@ -5,6 +5,7 @@
 #include <nlohmann/json.hpp>
 #include <cstddef> // offsetof
 #include <cstdlib>
+#include <ctime> // localtime_s/strftime for the project manager's "last opened"
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -91,31 +92,41 @@ namespace Snowstorm
 		// Apply the startup VSync preference (backend defaults to FIFO/on).
 		Renderer::SetVSync(CVars::VSync.Get());
 
-		// The project picker is INTERACTIVE-only. In an unattended run (smoke, perf-bench, dataset export, …)
-		// nobody can click it, so showing it boots an empty world that renders nothing — and a harness that
-		// only checks "did it crash?" reports PASS while measuring nothing. Suppress it and resolve a project
-		// deterministically instead, the way Unreal (-unattended) and Unity (-batchmode) suppress modal UI.
+		// An interactive editor with no project named on the command line starts in the PROJECT MANAGER —
+		// the Godot project manager / Unreal project browser model, where "which project" is a decision the
+		// user makes in the UI rather than one the engine guesses. The only ways past it are an explicit
+		// startup.project and the editor.reopen_last_project preference (Unreal's "Load the Most Recently
+		// Loaded Project at Startup", off by default).
+		//
+		// Unattended runs (smoke, perf-bench, dataset export, …) NEVER see it: nobody can click a picker, so
+		// it would boot an empty world that renders nothing and a harness that only checks "did it crash?"
+		// would report PASS having measured nothing. They resolve a project deterministically instead, the
+		// way Unreal (-unattended) and Unity (-batchmode) suppress modal UI.
 		const bool explicitProject = !CVars::StartupProject.Get().empty();
-		const bool hasRecentProject = interactive && !EditorPreferences::RecentProjects().empty();
+		const bool reopenLast = interactive && CVars::ReopenLastProject.Get() &&
+		                        !EditorPreferences::RecentProjects().empty();
 
-		m_ShowProjectStartScreen =
-		    interactive && (CVars::ForceProjectPicker.Get() || (!explicitProject && !hasRecentProject));
+		m_ShowProjectStartScreen = interactive && !explicitProject && !reopenLast;
 		if (m_ShowProjectStartScreen)
 		{
+			// The counterpart of the "Loaded startup project" line below: every boot says in the log which
+			// of the two entry paths it took, so a log alone answers "why is there no scene on screen?".
+			SS_CORE_INFO("No startup project requested; opening the project manager ({} recent project(s)).",
+			             EditorPreferences::RecentProjects().size());
 			Project::SetActive(nullptr);
 			m_ActiveWorld = CreateRef<World>(WorldType::Utility); // placeholder while the picker is up
 			return;
 		}
 
-		// Resolution order: explicit startup.project -> the most recent project (interactive only; an
-		// unattended run must not depend on this machine's editor preferences) -> the default Sandbox project,
-		// which is what keeps the headless harnesses zero-config.
+		// Resolution order: explicit startup.project -> the most recent project (only when the user asked to
+		// reopen it; an unattended run must not depend on this machine's editor preferences) -> the default
+		// Sandbox project, which is what keeps the headless harnesses zero-config.
 		std::filesystem::path ssproj;
 		if (explicitProject)
 		{
 			ssproj = CVars::StartupProject.Get();
 		}
-		else if (interactive && hasRecentProject)
+		else if (reopenLast)
 		{
 			ssproj = EditorPreferences::RecentProjects().front().Path;
 		}
@@ -143,7 +154,7 @@ namespace Snowstorm
 				return;
 			}
 
-			SS_CORE_WARN("Could not auto-open project '{}'; showing the project picker.", ssproj.string());
+			SS_CORE_WARN("Could not auto-open project '{}'; showing the project manager.", ssproj.string());
 			Project::SetActive(nullptr);
 			m_ShowProjectStartScreen = true;
 			m_ActiveWorld = CreateRef<World>(WorldType::Utility); // placeholder while the picker is up
@@ -329,6 +340,13 @@ namespace Snowstorm
 				return SaveProject();
 			};
 
+			cmds.CloseProject = [this]
+			{
+				// Deferred for the same reason as OpenProject: this lambda runs from a system of the very
+				// World the close would destroy.
+				RequestReturnToProjectManager();
+			};
+
 			cmds.ImportAsset = [this](const std::filesystem::path& sourcePath) -> bool
 			{
 				return ImportAsset(sourcePath);
@@ -367,6 +385,11 @@ namespace Snowstorm
 		m_HasPendingProject = true;
 	}
 
+	void EditorLayer::RequestReturnToProjectManager()
+	{
+		m_HasPendingProjectClose = true;
+	}
+
 	bool EditorLayer::CreateProject(const std::filesystem::path& directory, const std::string& name)
 	{
 		if (directory.empty() || name.empty())
@@ -379,26 +402,48 @@ namespace Snowstorm
 		project->SetProjectFileName(name + ".ssproj");
 		project->GetConfig().Name = name;
 
+		const std::filesystem::path projectFile = directory / project->GetProjectFileName();
+
+		// Never scaffold on top of an existing project: "New Project" pointed at a folder that already has
+		// one would otherwise rewrite its .ssproj (losing its StartScene/asset config) while keeping the
+		// old assets — a silent half-destroyed project. Godot refuses the same way.
+		std::error_code ec;
+		if (std::filesystem::exists(projectFile, ec))
+		{
+			SS_CORE_ERROR("A project already exists at '{}'; not overwriting it.", projectFile.string());
+			return false;
+		}
+
 		// Scaffold the asset folder tree — mirrors Hazel's CreateProject template folders, minus
 		// Audio/Scripts (no audio or scripting system exists yet). Folder names come from (and match
 		// the casing of) the config's relative paths, so ProjectConfig stays the single source of
 		// truth — a casing mismatch would break the day a case-sensitive platform lands.
+		// error_code overloads throughout: this runs from an ImGui frame, and a bad location (unwritable
+		// path, missing drive) must come back as a failed dialog, not an exception through the UI stack.
 		const std::filesystem::path assetsDir = directory / project->GetConfig().AssetDirectory;
 		for (const char* sub : {"meshes", "materials", "scenes", "shaders", "textures"})
 		{
-			std::filesystem::create_directories(assetsDir / sub);
+			std::filesystem::create_directories(assetsDir / sub, ec);
+			if (ec)
+			{
+				SS_CORE_ERROR("Could not create project folder '{}': {}", (assetsDir / sub).string(), ec.message());
+				return false;
+			}
 		}
 
-		if (!ProjectSerializer::Serialize(*project, directory / project->GetProjectFileName()))
+		if (!ProjectSerializer::Serialize(*project, projectFile))
 		{
+			SS_CORE_ERROR("Could not write project file '{}'.", projectFile.string());
 			return false;
 		}
+
+		SS_CORE_INFO("Created project '{}' at '{}'.", name, directory.string());
 
 		// Deferred, not a direct OpenProject call: CreateProject is reached from the File menu (a
 		// system of the CURRENT World), and OpenProject destroys that World. The scaffold above is
 		// pure file I/O, so it is safe to do inline; only the world swap must wait for the frame
-		// boundary.
-		RequestProjectOpen(directory / project->GetProjectFileName());
+		// boundary. OpenProject writes the start scene (there is none yet) once the new World exists.
+		RequestProjectOpen(projectFile);
 		return true;
 	}
 
@@ -426,16 +471,26 @@ namespace Snowstorm
 		m_ActiveWorld = CreateRef<World>(WorldType::Editor);
 		InitializeActiveWorld();
 
-		// Deferred, same as a normal "Open Scene" — if the project has no start scene yet (e.g. a
-		// brand-new project from CreateProject), TryLoadWorldFromFile warns and leaves the World
-		// empty (camera/viewport only).
-		RequestSceneLoad(Project::GetActive()->GetStartScenePath().string());
-
 		// Point the active-scene path at the NEW project's start scene immediately, not only after a
 		// successful load (TryLoadWorldFromFile sets it on success). Without this, a project whose
 		// start scene doesn't exist yet would leave the path on the PREVIOUS project's scene — and the
 		// next Ctrl+S would overwrite that old file with this project's empty world.
 		m_ActiveScenePath = Project::GetActive()->GetStartScenePath().string();
+
+		if (std::filesystem::exists(m_ActiveScenePath))
+		{
+			// Deferred, same as a normal "Open Scene".
+			RequestSceneLoad(m_ActiveScenePath);
+		}
+		else
+		{
+			// A brand-new project (or one whose start scene was deleted) has no scene file. Write one now
+			// from the freshly built World instead of leaving the editor on a warning and an empty
+			// viewport with nothing on disk: the project then opens a real, saved scene. Same treatment
+			// LoadOrCreateStartupWorld gives a first boot.
+			CreateStarterSceneEntities();
+			SaveActiveScene();
+		}
 
 		return true;
 	}
@@ -788,8 +843,26 @@ namespace Snowstorm
 		// it; this is a one-time path so a brief synchronous build is fine. The camera + viewport already
 		// exist (created persistently in OnAttach), so only scene content is added here.
 		m_ActiveScenePath = startupScenePath;
-		CreateDemoEntities();
-		PrewarmSceneTextures();
+
+		// The demo scene imports the BUNDLED project's meshes/materials/textures by relative path, so it
+		// only means anything there. Building it for any OTHER project yields a scene of unresolvable
+		// handles — a decode error, an async-load error, and empty draws. Those projects get the same
+		// one-light starter scene a newly created project gets.
+		std::error_code ec;
+		const Ref<Project> active = Project::GetActive();
+		const bool bundledProject =
+		    std::filesystem::equivalent(active->GetProjectDirectory() / active->GetProjectFileName(),
+		                                EnginePaths::DefaultProjectFile(), ec) &&
+		    !ec;
+		if (bundledProject)
+		{
+			CreateDemoEntities();
+			PrewarmSceneTextures();
+		}
+		else
+		{
+			CreateStarterSceneEntities();
+		}
 		SaveActiveScene();
 	}
 
@@ -895,6 +968,17 @@ namespace Snowstorm
 		// TAA history ping-pong (#44).
 		rtc.HistoryTarget[0] = CreateColorOnlyHDRTarget(windowWidth, windowHeight, "Main Viewport History0");
 		rtc.HistoryTarget[1] = CreateColorOnlyHDRTarget(windowWidth, windowHeight, "Main Viewport History1");
+	}
+
+	void EditorLayer::CreateStarterSceneEntities() const
+	{
+		// Just a sun. The sky needs no entity at all (a scene without an EnvironmentComponent falls back
+		// to the default procedural sky), so this one light is the smallest scene that isn't a black
+		// viewport — Unreal's starter map, minus everything that would need assets a new project lacks.
+		auto lightEntity = m_ActiveWorld->CreateEntity("Directional Light");
+		auto& light = lightEntity.AddComponent<DirectionalLightComponent>();
+		light.Direction = glm::normalize(glm::vec3(-0.4f, -1.0f, -0.3f));
+		lightEntity.AddComponent<VisibilityComponent>().Mask = Visibility::Scene | Visibility::Game;
 	}
 
 	void EditorLayer::CreateDemoEntities() const
@@ -1106,6 +1190,25 @@ namespace Snowstorm
 		{
 			return scenePath + ".editor";
 		}
+
+		// RecentProject::LastOpened is a unix timestamp; the project manager shows it in LOCAL time so
+		// "which of these did I work on last" reads correctly (a UTC stamp is off by the timezone and
+		// silently misorders nothing but confuses everyone).
+		std::string FormatLastOpened(const int64_t unixSeconds)
+		{
+			const auto time = static_cast<std::time_t>(unixSeconds);
+			std::tm local{};
+			if (localtime_s(&local, &time) != 0)
+			{
+				return {};
+			}
+			char buffer[32] = {};
+			if (std::strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M", &local) == 0)
+			{
+				return {};
+			}
+			return buffer;
+		}
 	} // namespace
 
 	void EditorLayer::SaveEditorCameraSidecar(const std::string& scenePath) const
@@ -1230,29 +1333,77 @@ namespace Snowstorm
 	{
 		const ImGuiViewport* viewport = ImGui::GetMainViewport();
 		ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-		ImGui::SetNextWindowSize(ImVec2(700.0f, 420.0f), ImGuiCond_Always);
+		ImGui::SetNextWindowSize(ImVec2(760.0f, 460.0f), ImGuiCond_Always);
 		constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
 		                                   ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings;
+		std::filesystem::path removeFromRecents; // deferred: mutating the list mid-iteration invalidates it
 		if (ImGui::Begin("Snowstorm Project Manager", nullptr, flags))
 		{
 			ImGui::TextUnformatted("Recent Projects");
 			ImGui::Separator();
-			for (const RecentProject& recent : EditorPreferences::RecentProjects())
+
+			// The list is the whole point of the screen, so give it every pixel above the button row.
+			const float footer = ImGui::GetFrameHeightWithSpacing() * 2.0f + ImGui::GetStyle().ItemSpacing.y * 2.0f;
+			if (ImGui::BeginChild("##recent_projects", ImVec2(0.0f, -footer)))
 			{
-				ImGui::PushID(recent.Path.string().c_str());
-				if (ImGui::Selectable(recent.Name.c_str(), false, 0, ImVec2(0.0f, 34.0f)))
+				for (const RecentProject& recent : EditorPreferences::RecentProjects())
 				{
-					RequestProjectOpen(recent.Path);
+					ImGui::PushID(recent.Path.string().c_str());
+					if (ImGui::Selectable("##recent", false, ImGuiSelectableFlags_AllowDoubleClick, ImVec2(0.0f, 38.0f)))
+					{
+						RequestProjectOpen(recent.Path);
+					}
+					// Entries survive a project being moved/deleted (the list is only pruned at load), so offer
+					// the way out Godot's project manager has: remove it without hunting down the prefs file.
+					if (ImGui::BeginPopupContextItem("##recent_ctx"))
+					{
+						if (ImGui::MenuItem("Remove from List"))
+							removeFromRecents = recent.Path;
+						ImGui::EndPopup();
+					}
+					// Two lines of text drawn ON the selectable (name over path+date). The cursor is moved
+					// explicitly for each line and then restored to the row's bottom edge, so the next row
+					// starts where this one ends instead of wherever the last Text call left it.
+					const ImVec2 rowMin = ImGui::GetItemRectMin();
+					const ImVec2 rowMax = ImGui::GetItemRectMax();
+					const float lineHeight = ImGui::GetTextLineHeight();
+					ImGui::SetCursorScreenPos(ImVec2(rowMin.x + 8.0f, rowMin.y + 3.0f));
+					ImGui::TextUnformatted(recent.Name.c_str());
+					ImGui::SetCursorScreenPos(ImVec2(rowMin.x + 8.0f, rowMin.y + 3.0f + lineHeight));
+					if (recent.LastOpened > 0)
+					{
+						ImGui::TextDisabled("%s  |  last opened %s", recent.Path.string().c_str(),
+						                    FormatLastOpened(recent.LastOpened).c_str());
+					}
+					else
+					{
+						ImGui::TextDisabled("%s", recent.Path.string().c_str());
+					}
+					ImGui::SetCursorScreenPos(ImVec2(rowMin.x, rowMax.y + ImGui::GetStyle().ItemSpacing.y));
+					ImGui::Dummy(ImVec2(0.0f, 0.0f)); // moving the cursor alone doesn't grow the child's content rect
+					ImGui::PopID();
 				}
-				ImGui::SameLine(230.0f);
-				ImGui::TextDisabled("%s", recent.Path.string().c_str());
-				ImGui::PopID();
+
+				if (EditorPreferences::RecentProjects().empty())
+				{
+					ImGui::TextDisabled("No recent projects yet.");
+					// A first launch would otherwise be a dead end for anyone who just cloned the repo: the
+					// bundled Sandbox project is what every doc and headless harness points at, so offer it
+					// directly instead of making the user file-dialog their way to it.
+					const std::filesystem::path bundled = EnginePaths::DefaultProjectFile();
+					if (std::filesystem::is_regular_file(bundled))
+					{
+						ImGui::Spacing();
+						if (ImGui::Button("Open the bundled Sandbox project"))
+							RequestProjectOpen(bundled);
+						ImGui::SameLine();
+						ImGui::TextDisabled("%s", bundled.string().c_str());
+					}
+				}
 			}
+			ImGui::EndChild();
 
-			if (EditorPreferences::RecentProjects().empty())
-				ImGui::TextDisabled("No recent projects yet.");
-
-			ImGui::SetCursorPosY(ImGui::GetWindowHeight() - 52.0f);
+			ImGui::Separator();
 			if (ImGui::Button("New Project...", ImVec2(150.0f, 0.0f)))
 				m_OpenStartScreenNewProject = true;
 			ImGui::SameLine();
@@ -1262,19 +1413,42 @@ namespace Snowstorm
 				if (!path.empty())
 					RequestProjectOpen(path);
 			}
+			ImGui::SameLine();
+			// Unreal's "Load the Most Recently Loaded Project at Startup" — the escape hatch for someone who
+			// works in one project all day and doesn't want this screen. Persisted CVar, so the CVar panel
+			// and the config file show the same switch.
+			if (bool reopen = CVars::ReopenLastProject.Get();
+			    ImGui::Checkbox("Skip this screen next time (reopen last project)", &reopen))
+			{
+				CVars::ReopenLastProject.Set(reopen);
+				CVarRegistry::Get().SaveConfig(CVarRegistry::kConfigPath);
+			}
 		}
 		ImGui::End();
 
+		if (!removeFromRecents.empty())
+			EditorPreferences::RemoveProject(removeFromRecents);
+
 		if (m_OpenStartScreenNewProject)
 		{
+			// Pre-fill the location so Create is one name away instead of a file-dialog trip. Only when
+			// empty: a location the user typed and then cancelled out of survives reopening the dialog
+			// (the buffers are cleared on a successful create, so the next new project defaults again).
+			if (m_StartProjectLocation[0] == '\0')
+			{
+				const std::string defaultLocation = EnginePaths::DefaultProjectsDirectory().string();
+				strncpy_s(m_StartProjectLocation, defaultLocation.c_str(), sizeof(m_StartProjectLocation) - 1);
+			}
 			ImGui::OpenPopup("New Project");
 			m_OpenStartScreenNewProject = false;
 		}
 		ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
 		if (ImGui::BeginPopupModal("New Project", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
 		{
+			ImGui::SetNextItemWidth(420.0f);
 			ImGui::InputTextWithHint("##start_project_name", "Project Name", m_StartProjectName,
 			                         sizeof(m_StartProjectName));
+			ImGui::SetNextItemWidth(420.0f);
 			ImGui::InputTextWithHint("##start_project_location", "Project Location", m_StartProjectLocation,
 			                         sizeof(m_StartProjectLocation));
 			ImGui::SameLine();
@@ -1286,12 +1460,17 @@ namespace Snowstorm
 			}
 
 			const bool valid = m_StartProjectName[0] != '\0' && m_StartProjectLocation[0] != '\0';
+			// What Create actually scaffolds is Location/Name (a fresh subfolder), never the browsed
+			// folder itself — show it, same as the File-menu dialog.
+			const std::filesystem::path directory =
+			    valid ? std::filesystem::path(m_StartProjectLocation) / m_StartProjectName : std::filesystem::path{};
+			ImGui::TextDisabled("Full Project Path: %s", directory.string().c_str());
+			ImGui::Separator();
+
 			if (!valid)
 				ImGui::BeginDisabled();
 			if (ImGui::Button("Create", ImVec2(120.0f, 0.0f)))
 			{
-				const std::filesystem::path directory = std::filesystem::path(m_StartProjectLocation) /
-				                                        m_StartProjectName;
 				if (CreateProject(directory, m_StartProjectName))
 				{
 					m_StartProjectName[0] = '\0';
@@ -1362,6 +1541,26 @@ namespace Snowstorm
 		// OpenProject replaces the whole World (and queues the new project's start scene as a pending
 		// scene), so it must run first — and never from inside a UI system, which is a system of the
 		// very World it would destroy (see RequestProjectOpen).
+		// "Close Project" runs before the pending-open check for the same reason that one runs first: it
+		// replaces the whole World. It leaves the editor in exactly the state a fresh boot with no project
+		// lands in — a placeholder Utility world with the project manager on top.
+		if (m_HasPendingProjectClose && m_FramesPresented > 1)
+		{
+			m_HasPendingProjectClose = false;
+			m_HasPendingProject = false; // anything queued belongs to the project we are leaving
+			m_PendingProjectPath.clear();
+			m_HasPendingScene = false;
+			m_PendingScenePath.clear();
+			CloseProject();
+			m_ActiveScenePath.clear();
+			m_ActiveWorld = CreateRef<World>(WorldType::Utility);
+			// A project may have been deleted while the editor was open; the manager should not offer it.
+			EditorPreferences::RemoveMissingProjects();
+			m_ShowProjectStartScreen = true;
+			SS_CORE_INFO("Project closed; returning to the project manager.");
+			return;
+		}
+
 		if (m_HasPendingProject && m_FramesPresented > 1)
 		{
 			m_HasPendingProject = false;

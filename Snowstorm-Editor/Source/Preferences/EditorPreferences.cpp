@@ -92,6 +92,20 @@ namespace Snowstorm
 		Save();
 	}
 
+	void EditorPreferences::RemoveProject(const std::filesystem::path& path)
+	{
+		// Compare the way RecordProject stores them (weakly_canonical, absolute fallback) so an entry added
+		// through a relative path still matches the one the UI hands back.
+		std::error_code ec;
+		const std::filesystem::path normalized = std::filesystem::weakly_canonical(path, ec);
+		const std::filesystem::path storedPath = ec ? std::filesystem::absolute(path) : normalized;
+		s_RecentProjects.erase(std::remove_if(s_RecentProjects.begin(), s_RecentProjects.end(),
+		                                      [&](const RecentProject& item)
+		                                      { return item.Path == storedPath || item.Path == path; }),
+		                       s_RecentProjects.end());
+		Save();
+	}
+
 	void EditorPreferences::RemoveMissingProjects()
 	{
 		s_RecentProjects.erase(std::remove_if(s_RecentProjects.begin(), s_RecentProjects.end(),

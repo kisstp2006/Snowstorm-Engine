@@ -38,11 +38,16 @@ namespace Snowstorm
 		std::function<bool(const std::string& /*scenePath; empty = current scene*/)> SetStartupScene;
 
 		// Project lifecycle, bound by the editor layer (see EditorLayer::CreateProject/OpenProject/
-		// SaveProject). All three own switching the active World + Project — the menu system just
+		// SaveProject). All of them own switching the active World + Project — the menu system just
 		// asks "where" (via FileDialog) and calls these.
 		std::function<bool(const std::filesystem::path& /*directory*/, const std::string& /*name*/)> NewProject;
 		std::function<bool(const std::filesystem::path& /*ssprojPath*/)> OpenProject;
 		std::function<bool()> SaveProject;
+
+		// Leave the project and return to the project manager (Godot's "Quit to Project List"). Saves the
+		// project file, not the scene — same rule as switching projects, where keeping or discarding
+		// unsaved scene edits stays the user's call.
+		std::function<void()> CloseProject;
 
 		// Copy/register any supported external asset into the active project. Models additionally create
 		// their imported scene entities. Returns false for unsupported files or failed copies/imports.

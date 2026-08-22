@@ -70,9 +70,9 @@ namespace Snowstorm::CVars
 	// already uses), NOT a missing default. A real path as the default made "explicitly set to the Sandbox
 	// project" indistinguishable from "unset" — IsAtDefault() reported true either way, so SS_STARTUP_PROJECT
 	// was silently ignored. The fallback when it IS empty lives in EnginePaths::DefaultProjectFile().
-	CVar<std::string> StartupProject{"startup.project", "", "Explicit .ssproj startup override, e.g. Projects/Sandbox/Sandbox.ssproj. Empty = none requested: the editor reopens its most recent project (picker on a fresh install), Runtime and unattended runs fall back to the default Sandbox project.", CVarFlags::ReadOnly};
+	CVar<std::string> StartupProject{"startup.project", "", "Explicit .ssproj startup override, e.g. Projects/Sandbox/Sandbox.ssproj. Empty = none requested: the editor opens its project manager, Runtime and unattended runs fall back to the default Sandbox project.", CVarFlags::ReadOnly};
 
-	CVar<bool> ForceProjectPicker{"startup.project_picker", false, "Show the project picker at editor startup instead of auto-opening the most recent project. Ignored in unattended runs (smoke/perf-bench/dataset export), which have nobody to click it.", CVarFlags::ReadOnly};
+	CVar<bool> ReopenLastProject{"editor.reopen_last_project", false, "Editor startup: ON = skip the project manager and reopen the most recently opened project (Unreal's 'Load the Most Recently Loaded Project at Startup'). OFF (default) = always start in the project manager. Ignored when startup.project names a project, and in unattended runs (nobody can click a picker, so those resolve a project deterministically).", CVarFlags::Persist};
 
 	CVar<std::string> StartupScene{"startup.scene", "", "Path to a .world to load at startup (empty = the active project's StartScene); e.g. Projects/Sandbox/assets/scenes/Sponza.world", CVarFlags::ReadOnly};
 

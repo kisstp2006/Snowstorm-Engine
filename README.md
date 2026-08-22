@@ -36,7 +36,9 @@ raster/analytic baselines by a built-in metrics harness.
 - **Editor.** ImGui dockspace with scene hierarchy, inspector, viewport (ImGuizmo gizmos,
   click-to-select, camera framing), content browser, undo/redo, a performance panel (per-system CPU
   and per-pass GPU timings), a live CVar panel, and a developer console with autocomplete.
-- **Projects, assets, scenes.** `.ssproj` projects; mesh/material/texture assets (assimp, stb)
+- **Projects, assets, scenes.** `.ssproj` projects opened from a project manager the editor boots
+  into (recent list, create/open; `--startup.project=<path>` or the `editor.reopen_last_project`
+  preference skips it); mesh/material/texture assets (assimp, stb)
   cooked to binary caches and loaded asynchronously off the main thread; JSON scene serialization;
   HLSL shaders compiled to SPIR-V (`dxc`) async, cached, and hot-reloaded.
 - **Console variables.** Typed CVar registry resolved from defaults, config file
