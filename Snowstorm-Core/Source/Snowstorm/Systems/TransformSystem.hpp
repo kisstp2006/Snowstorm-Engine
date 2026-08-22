@@ -32,5 +32,6 @@ namespace Snowstorm
 		std::vector<std::vector<entt::entity>> m_Buckets; // index = depth
 		std::vector<uint8_t> m_Changed;                   // scratch: per-entity "world matrix changed" flag
 		size_t m_BucketedCount = 0;
+		uint64_t m_BucketedGeneration = 0;
 	};
 }

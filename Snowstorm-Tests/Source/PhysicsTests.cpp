@@ -43,7 +43,7 @@ namespace
 			auto& tr = e.AddComponent<TransformComponent>();
 			tr.Position = pos;
 			tr.Scale = scale;
-			e.AddComponent<BoxColliderComponent>();
+			e.AddComponent<BoxColliderComponent>().HalfExtents = glm::vec3(0.5f); // explicit: the numbers below assume a unit box
 			auto& rb = e.AddComponent<RigidBodyComponent>();
 			rb.Motion = motion;
 			rb.CollisionLayer = layer;
@@ -96,7 +96,7 @@ TEST_CASE("A child collider folds into the parent body's compound shape and foll
 	Entity body = pw.Box("Body", {0, 4, 0}, {1, 1, 1}, MotionType::Dynamic);
 	Entity child = pw.W.CreateEntity("Child");
 	child.AddComponent<TransformComponent>().Position = {2, 0, 0};
-	child.AddComponent<BoxColliderComponent>();
+	child.AddComponent<BoxColliderComponent>().HalfExtents = glm::vec3(0.5f);
 	pw.W.SetParent(child, body, false);
 
 	pw.Step(1);

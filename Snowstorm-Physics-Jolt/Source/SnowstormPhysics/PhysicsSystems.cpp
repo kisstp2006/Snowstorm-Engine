@@ -307,8 +307,10 @@ namespace Snowstorm
 		if (rt && rt->AuthoredHash == hash)
 		{
 			// Unchanged authored data. Static/kinematic bodies follow an edited transform (the gizmo, a
-			// script writing Position); dynamic ones are driven by the simulation instead.
-			if (!rt->Dynamic && reg.WasChanged<WorldTransformComponent>(e))
+			// script writing Position). Dynamic ones are driven by the simulation while it runs — but while
+			// it is NOT running (Edit mode) the transform is the truth, so an edit teleports the body too;
+			// otherwise Play would start from the stale pose and the edit would vanish.
+			if ((!rt->Dynamic || !simulating) && reg.WasChanged<WorldTransformComponent>(e))
 			{
 				glm::vec3 pos, s;
 				glm::quat rot;

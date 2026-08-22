@@ -36,13 +36,13 @@ namespace Snowstorm
 
 	struct BoxColliderComponent
 	{
-		glm::vec3 HalfExtents{0.5f};
+		glm::vec3 HalfExtents{1.0f}; // a 2x2x2 box: matches the engine's unit cube mesh (cube.obj spans -1..1)
 		glm::vec3 Offset{0.0f};
 	};
 
 	struct SphereColliderComponent
 	{
-		float Radius = 0.5f;
+		float Radius = 1.0f;
 		glm::vec3 Offset{0.0f};
 	};
 

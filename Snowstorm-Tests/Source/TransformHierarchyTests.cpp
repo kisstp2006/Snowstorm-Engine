@@ -293,3 +293,24 @@ TEST_CASE("Asset handles and material override lists serialize through the gener
 	REQUIRE(rov[1].Type == MaterialOverrideType::Texture);
 	REQUIRE(rov[1].Texture.Value() == 12465655103903380530ull);
 }
+
+TEST_CASE("TransformSystem survives a scene wipe that recreates the same number of entities", "[hierarchy][ecs]")
+{
+	// Play -> Stop restores the snapshot: every entity is destroyed and re-created with NEW handles but
+	// the same count. The depth buckets must not keep the dead handles (was an EnTT assert).
+	ScopedSerialEcs serial;
+	World world;
+	TransformSystem system(&world);
+	Entity a = MakeTransformEntity(world, "A", {1, 0, 0});
+	Entity b = MakeTransformEntity(world, "B", {2, 0, 0});
+	world.SetParent(b, a, false);
+	system.Execute(Timestep{0.016f});
+
+	world.ClearSceneEntities();
+	REQUIRE_FALSE(a.IsValid());
+	Entity c = MakeTransformEntity(world, "C", {3, 0, 0});
+	Entity d = MakeTransformEntity(world, "D", {4, 0, 0});
+	world.SetParent(d, c, false);
+	system.Execute(Timestep{0.016f}); // must not touch the old handles
+	REQUIRE(glm::vec3(world.GetRegistry().Read<WorldTransformComponent>(d.Handle()).LocalToWorld[3]) == glm::vec3(7, 0, 0));
+}

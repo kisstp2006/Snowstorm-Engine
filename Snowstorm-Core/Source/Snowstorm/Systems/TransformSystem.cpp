@@ -9,11 +9,13 @@ namespace Snowstorm
 	bool TransformSystem::NeedsRebucket() const
 	{
 		auto& reg = m_World->GetRegistry();
-		if (reg.view<TransformComponent>().size() != m_BucketedCount)
+		if (reg.view<TransformComponent>().size() != m_BucketedCount || m_World->SceneGeneration() != m_BucketedGeneration)
 		{
-			return true; // entities added/removed (also covers scene loads and clears)
+			return true; // entities added/removed, or the scene was wiped (a Play->Stop restore re-creates
+			             // the same NUMBER of entities with new handles — the count alone would miss that)
 		}
-		return !InitView<HierarchyComponent>().empty() || !ChangedView<HierarchyComponent>().empty() ||
+		return !InitView<TransformComponent>().empty() || !FiniView<TransformComponent>().empty() ||
+		       !InitView<HierarchyComponent>().empty() || !ChangedView<HierarchyComponent>().empty() ||
 		       !FiniView<HierarchyComponent>().empty() || reg.AnyDestroyedThisFrame();
 	}
 
@@ -26,6 +28,7 @@ namespace Snowstorm
 		}
 
 		m_BucketedCount = 0;
+		m_BucketedGeneration = m_World->SceneGeneration();
 		for (const auto view = reg.view<TransformComponent>(); const entt::entity e : view)
 		{
 			const auto* h = reg.try_get_const<HierarchyComponent>(e);
@@ -77,6 +80,10 @@ namespace Snowstorm
 				for (size_t i = begin; i < end; ++i)
 				{
 					const entt::entity e = bucket[i];
+					if (!reg.valid(e) || !reg.any_of<TransformComponent>(e))
+					{
+						continue; // bucket is rebuilt on the next frame; never touch a dead handle
+					}
 					glm::mat4 world = reg.get<TransformComponent>(e).GetTransformMatrix();
 					if (const auto* h = reg.try_get_const<HierarchyComponent>(e); h && h->Parent != entt::null)
 					{
