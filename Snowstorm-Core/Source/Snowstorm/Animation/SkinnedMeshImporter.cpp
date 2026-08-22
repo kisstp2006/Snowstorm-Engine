@@ -295,4 +295,34 @@ namespace Snowstorm
 		}
 		return model;
 	}
+
+	std::vector<std::string> EnumerateSkinnedSubAssetParts(const std::filesystem::path& path)
+	{
+		// Enumerating means a full parse, and this runs on every model import -- so skip the formats that
+		// provably cannot carry a skin. OBJ is the only one in this pipeline: it has no notion of bones or
+		// animation at all, so parsing one to discover none is pure waste.
+		std::string extension = path.extension().string();
+		std::ranges::transform(extension, extension.begin(),
+		                       [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
+		if (extension == ".obj")
+		{
+			return {};
+		}
+
+		std::string error;
+		const std::optional<SkinnedModel> model = ImportSkinnedModel(path, error);
+		if (!model)
+		{
+			return {}; // static model (or unreadable): it contributes no skeleton and no clips
+		}
+
+		std::vector<std::string> parts;
+		parts.reserve(model->Clips.size() + 1);
+		parts.emplace_back("skeleton");
+		for (const AnimationClip& clip : model->Clips)
+		{
+			parts.push_back("animation=" + clip.GetName());
+		}
+		return parts;
+	}
 }

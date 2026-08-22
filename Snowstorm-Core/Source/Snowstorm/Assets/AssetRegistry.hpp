@@ -38,6 +38,12 @@ namespace Snowstorm
 		// saved.
 		std::vector<ScannedFile> Scan(const std::filesystem::path& assetDir, bool& changed);
 
+		// A sub-asset's own type, from its part key. Submeshes inherit the source's type (a model's part is
+		// a Mesh), but a skinned model also contributes parts that are NOT meshes -- "skeleton" and
+		// "animation=<name>" -- and a scene referencing one has to get the right type back from the
+		// registry. One place decides this so the scan, the inspector's asset picker and the loader agree.
+		[[nodiscard]] static AssetType TypeForPart(std::string_view part, AssetType sourceType);
+
 		// Register one source (or one "file?submesh=N" part); creates/updates its .meta. Idempotent.
 		AssetHandle Import(const std::filesystem::path& assetPath, AssetType type);
 
@@ -68,6 +74,7 @@ namespace Snowstorm
 		};
 
 		static std::string SourceKeyOf(const std::filesystem::path& assetPath); // lower-cased source path
+
 		static std::filesystem::path SourcePathOf(const std::filesystem::path& assetPath); // strips ?part
 		SourceInfo& RefreshSource(const std::filesystem::path& sourcePath, bool force);
 		void ApplySourceKeys(const std::filesystem::path& sourcePath);

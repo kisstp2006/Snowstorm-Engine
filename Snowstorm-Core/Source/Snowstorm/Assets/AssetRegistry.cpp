@@ -55,6 +55,19 @@ namespace Snowstorm
 		return PathKey(SourcePathOf(assetPath));
 	}
 
+	AssetType AssetRegistry::TypeForPart(const std::string_view part, const AssetType sourceType)
+	{
+		if (part == "skeleton")
+		{
+			return AssetType::Skeleton;
+		}
+		if (part.starts_with("animation="))
+		{
+			return AssetType::Animation;
+		}
+		return sourceType; // "" (the file itself) or "submesh=N"
+	}
+
 	std::filesystem::path AssetRegistry::Resolve(const std::filesystem::path& assetPath) const
 	{
 		const std::filesystem::path src = SourcePathOf(assetPath);
@@ -410,11 +423,14 @@ namespace Snowstorm
 				{
 					std::filesystem::path partPath = rel;
 					partPath += "?" + part;
-					if (FindHandleByPath(partPath, type).Value() == 0)
+					// A model's parts are not all the same type: submeshes are Meshes, but a skinned model
+					// also contributes a Skeleton and one Animation per clip.
+					const AssetType partType = TypeForPart(part, type);
+					if (FindHandleByPath(partPath, partType).Value() == 0)
 					{
 						AssetMetadata m{};
 						m.Handle = guid;
-						m.Type = type;
+						m.Type = partType;
 						m.Path = partPath;
 						m_Metadata[guid] = std::move(m);
 					}

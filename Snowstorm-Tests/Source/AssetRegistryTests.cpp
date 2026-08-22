@@ -131,3 +131,57 @@ TEST_CASE("Sub-assets (file?submesh=N) get their GUIDs from the meta's SubAssets
 	fresh.Scan(tp.Dir / "assets", changed);
 	REQUIRE(fresh.FindHandleByPath("assets/meshes/m.obj?submesh=1", AssetType::Mesh) == part1);
 }
+
+TEST_CASE("A model's parts get their own asset types, not the source's", "[assets][animation]")
+{
+	// A skinned model contributes parts that are NOT meshes. If every part inherited the source's type,
+	// a scene referencing a clip would get a Mesh back from the registry, and the inspector's asset
+	// picker would offer clips as meshes.
+	REQUIRE(AssetRegistry::TypeForPart("", AssetType::Mesh) == AssetType::Mesh);
+	REQUIRE(AssetRegistry::TypeForPart("submesh=3", AssetType::Mesh) == AssetType::Mesh);
+	REQUIRE(AssetRegistry::TypeForPart("skeleton", AssetType::Mesh) == AssetType::Skeleton);
+	REQUIRE(AssetRegistry::TypeForPart("animation=Walk", AssetType::Mesh) == AssetType::Animation);
+	// A clip whose name contains an '=' must still resolve (the key is a prefix match, not a split).
+	REQUIRE(AssetRegistry::TypeForPart("animation=A=B", AssetType::Mesh) == AssetType::Animation);
+}
+
+TEST_CASE("Skeleton and animation sub-assets survive a rescan with stable handles", "[assets][animation]")
+{
+	TempProject tp;
+	std::filesystem::create_directories(tp.Dir / "assets" / "meshes");
+	tp.Write("assets/meshes/hero.gltf", "{}"); // Scan only stats the source; the .meta carries the parts
+
+	const std::filesystem::path source = "assets/meshes/hero.gltf";
+
+	AssetRegistry registry;
+	registry.SetProjectDirectory(tp.Dir);
+	bool changed = false;
+	registry.Scan(tp.Dir / "assets", changed);
+
+	// Register the parts the skinned importer would have found.
+	const AssetHandle skeleton = registry.Import(source.generic_string() + "?skeleton", AssetType::Skeleton);
+	const AssetHandle walk = registry.Import(source.generic_string() + "?animation=Walk", AssetType::Animation);
+	const AssetHandle run = registry.Import(source.generic_string() + "?animation=Run", AssetType::Animation);
+	REQUIRE(skeleton.Value() != 0);
+	REQUIRE(walk.Value() != 0);
+	REQUIRE(run.Value() != 0);
+	REQUIRE(walk != run);
+
+	// A fresh clone of the project: nothing but the committed .meta sidecars. Handles must come back
+	// identical, or every scene reference to a clip breaks on the next machine.
+	AssetRegistry rebuilt;
+	rebuilt.SetProjectDirectory(tp.Dir);
+	rebuilt.Scan(tp.Dir / "assets", changed);
+
+	const AssetMetadata* skeletonMeta = rebuilt.GetMetadata(skeleton);
+	const AssetMetadata* walkMeta = rebuilt.GetMetadata(walk);
+	const AssetMetadata* runMeta = rebuilt.GetMetadata(run);
+	REQUIRE(skeletonMeta != nullptr);
+	REQUIRE(walkMeta != nullptr);
+	REQUIRE(runMeta != nullptr);
+
+	REQUIRE(skeletonMeta->Type == AssetType::Skeleton);
+	REQUIRE(walkMeta->Type == AssetType::Animation);
+	REQUIRE(runMeta->Type == AssetType::Animation);
+	REQUIRE(walkMeta->Path.generic_string() == source.generic_string() + "?animation=Walk");
+}

@@ -47,4 +47,13 @@ namespace Snowstorm
 	// Returns nullopt when the file cannot be read or contains no skinned mesh (a static model is not an
 	// error here, just not this importer's job); `outError` explains which.
 	std::optional<SkinnedModel> ImportSkinnedModel(const std::filesystem::path& path, std::string& outError);
+
+	// The sub-asset part keys a skinned source contributes -- "skeleton", and "animation=<clip name>" per
+	// clip -- in the form AssetRegistry paths use ("model.gltf?skeleton"). Empty for a static model.
+	//
+	// Clips are keyed by NAME rather than by index, unlike submeshes: an animation's name survives a
+	// re-export, its position in the file does not, and index keys would silently re-point every scene
+	// reference the moment someone inserts a clip. Pair each key with AssetRegistry::TypeForPart for its
+	// asset type.
+	std::vector<std::string> EnumerateSkinnedSubAssetParts(const std::filesystem::path& path);
 }

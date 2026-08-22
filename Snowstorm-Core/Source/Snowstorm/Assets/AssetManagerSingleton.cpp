@@ -1,5 +1,7 @@
 #include "AssetManagerSingleton.hpp"
 
+#include "Snowstorm/Animation/SkinnedMeshImporter.hpp"
+
 #include "AssetFileTime.hpp"
 #include "MeshBoundsBuilder.hpp"
 #include "MeshMetaCache.hpp"
@@ -360,6 +362,18 @@ namespace Snowstorm
 			e.AddComponent<VisibilityComponent>().Mask = Visibility::Scene | Visibility::Game;
 
 			created.push_back(e);
+		}
+
+		// A skinned source contributes more than meshes: one Skeleton and one Animation per clip, each its
+		// own sub-asset so a scene can reference a clip directly. Discovering them needs a SECOND assimp
+		// read, because the one above ran PreTransformVertices -- which deletes exactly the bones and
+		// animations we are looking for. That cost is paid at import time only, never on load.
+		{
+			const std::filesystem::path modelFile = Registry().Resolve(modelPathStr);
+			for (const std::string& part : EnumerateSkinnedSubAssetParts(modelFile))
+			{
+				Import(modelPathStr + "?" + part, AssetRegistry::TypeForPart(part, AssetType::Mesh));
+			}
 		}
 
 		SS_CORE_INFO("ImportModel: {} -> {} entities, {} materials", path.string(), created.size(), scene->mNumMaterials);
