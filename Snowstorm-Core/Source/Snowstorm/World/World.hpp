@@ -8,6 +8,9 @@
 #include "Snowstorm/Utility/UUID.hpp"
 
 #include <entt/entt.hpp>
+#include <glm/mat4x4.hpp>
+
+#include <functional>
 #include <vector>
 
 namespace Snowstorm
@@ -36,6 +39,23 @@ namespace Snowstorm
 		// the iteration. FlushDestroyQueue() performs the actual destroy and is called once per frame.
 		void DestroyEntity(Entity entity);
 		void FlushDestroyQueue();
+
+		// ---- Transform hierarchy (the only way to mutate HierarchyComponent) ----
+
+		// Attach `child` under `parent` (an invalid `parent` detaches to root). Both need a
+		// TransformComponent. `keepWorld` (Unity Transform.SetParent(p, worldPositionStays=true)) rewrites
+		// the child's local transform so it stays put in world space; false keeps the local values (what
+		// the serializer wants). Rejects self-parenting and cycles. Appends as the last child, so sibling
+		// order is insertion order (deterministic saves).
+		bool SetParent(Entity child, Entity parent, bool keepWorld = true);
+		[[nodiscard]] Entity GetParent(Entity entity) const;
+		[[nodiscard]] bool IsDescendantOf(Entity entity, Entity ancestor) const;
+		void ForEachChild(Entity parent, const std::function<void(Entity)>& fn) const;
+
+		// Exact world matrix computed by walking the parent chain (not the per-frame cache). Use when a
+		// world-space result is needed in the same frame the local transform/hierarchy was edited (gizmo,
+		// reparent-keep-world, UI-phase picking); hot per-frame consumers read WorldTransformComponent.
+		[[nodiscard]] glm::mat4 ComputeWorldMatrix(Entity entity) const;
 
 		void Clear() const;
 
@@ -82,6 +102,9 @@ namespace Snowstorm
 		Scope<InputEventBridge> m_InputEventBridge;
 
 		std::vector<entt::entity> m_PendingDestroy; // flushed at end of frame by FlushDestroyQueue
+
+		void UnlinkFromParent(entt::entity child) const;
+		void SetDepthRecursive(entt::entity root, uint32_t depth) const;
 
 		// Bumped by ClearSceneEntities (which is const, so this is mutable). See SceneGeneration().
 		mutable uint64_t m_SceneGeneration = 0;

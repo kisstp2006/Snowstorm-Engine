@@ -11,6 +11,7 @@
 #include "Snowstorm/Systems/CameraJitterSystem.hpp"
 #include "Snowstorm/Systems/CameraPathSystem.hpp"
 #include "Snowstorm/Systems/CameraRuntimeUpdateSystem.hpp"
+#include "Snowstorm/Systems/TransformSystem.hpp"
 #include "Snowstorm/Systems/MaterialResolveSystem.hpp"
 #include "Snowstorm/Systems/MeshResolveSystem.hpp"
 #include "Snowstorm/Systems/PrevTransformSnapshotSystem.hpp"
@@ -44,6 +45,7 @@ namespace Snowstorm
 		// Pump worker-completed async loads (GPU finalize) before the Resolve phase consumes them.
 		sm.RegisterSystem<AssetLoadSystem>(SystemPhase::AssetSync);
 
+		sm.RegisterSystem<TransformSystem>(SystemPhase::Resolve); // world matrices first: everything below reads them
 		sm.RegisterSystem<CameraRuntimeUpdateSystem>(SystemPhase::Resolve);
 		sm.RegisterSystem<MeshResolveSystem>(SystemPhase::Resolve);
 		sm.RegisterSystem<MaterialResolveSystem>(SystemPhase::Resolve);

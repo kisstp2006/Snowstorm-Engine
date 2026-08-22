@@ -20,7 +20,6 @@ namespace Snowstorm
 	class TrackedRegistry;
 	struct CameraComponent;
 	struct CameraRuntimeComponent;
-	struct TransformComponent;
 	struct CameraVisibilityComponent;
 	struct RenderTargetComponent;
 
@@ -43,7 +42,7 @@ namespace Snowstorm
 		entt::entity Entity = entt::null;
 		const CameraComponent* Cam = nullptr;
 		const CameraRuntimeComponent* Rt = nullptr;
-		const TransformComponent* Transform = nullptr;
+		glm::vec3 Position{0.0f}; // world-space camera position (WorldTransformComponent)
 		const CameraVisibilityComponent* Visibility = nullptr;
 	};
 

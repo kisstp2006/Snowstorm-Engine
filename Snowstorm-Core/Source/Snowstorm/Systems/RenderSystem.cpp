@@ -10,6 +10,7 @@
 #include "Snowstorm/Components/PrevTransformComponent.hpp"
 #include "Snowstorm/Components/RenderTargetComponent.hpp"
 #include "Snowstorm/Components/TransformComponent.hpp"
+#include "Snowstorm/Components/WorldTransformComponent.hpp"
 #include "Snowstorm/Components/ViewportComponent.hpp"
 #include "Snowstorm/Components/VisibilityCacheComponent.hpp"
 #include "Snowstorm/Components/VisibilityComponents.hpp"
@@ -39,7 +40,7 @@ namespace Snowstorm
 
 			const entt::entity e = ResolveViewportCamera(reg, viewportEntity);
 			if (e == entt::null ||
-			    !reg.all_of<CameraComponent, CameraRuntimeComponent, TransformComponent, CameraVisibilityComponent>(e))
+			    !reg.all_of<CameraComponent, CameraRuntimeComponent, WorldTransformComponent, CameraVisibilityComponent>(e))
 			{
 				return pick;
 			}
@@ -47,7 +48,7 @@ namespace Snowstorm
 			pick.Entity = e;
 			pick.Cam = &reg.Read<CameraComponent>(e);
 			pick.Rt = &reg.Read<CameraRuntimeComponent>(e);
-			pick.Transform = &reg.Read<TransformComponent>(e);
+			pick.Position = glm::vec3(reg.Read<WorldTransformComponent>(e).LocalToWorld[3]);
 			pick.Visibility = &reg.Read<CameraVisibilityComponent>(e);
 			return pick;
 		}
@@ -88,7 +89,7 @@ namespace Snowstorm
 
 		// Cameras must have runtime updated before RenderSystem
 		const auto cameraView = View<
-		    const TransformComponent,
+		    const WorldTransformComponent,
 		    const CameraComponent,
 		    const CameraTargetComponent,
 		    const CameraRuntimeComponent,
@@ -96,7 +97,7 @@ namespace Snowstorm
 
 		// Meshes have visibility
 		const auto meshView = View<
-		    const TransformComponent,
+		    const WorldTransformComponent,
 		    const MeshComponent,
 		    const MaterialComponent,
 		    const VisibilityComponent>();
@@ -307,7 +308,7 @@ namespace Snowstorm
 		}
 
 		const CameraPick cam = FindCameraForViewport(fc.Reg, vpEntity);
-		if (cam.Entity == entt::null || !cam.Rt || !cam.Transform || !cam.Visibility)
+		if (cam.Entity == entt::null || !cam.Rt || !cam.Visibility)
 		{
 			return;
 		}
@@ -542,7 +543,7 @@ namespace Snowstorm
 	}
 
 	void RenderSystem::DrawVisibleMeshes(FrameContext& fc, const CameraPick& cam,
-	                                     const std::function<void(entt::entity, const TransformComponent&,
+	                                     const std::function<void(entt::entity, const WorldTransformComponent&,
 	                                                              const MeshComponent&, const MaterialComponent&)>& draw)
 	{
 		for (const auto& cache = fc.Reg.Read<VisibilityCacheComponent>(cam.Entity);
@@ -551,11 +552,11 @@ namespace Snowstorm
 			// VisibleMeshes is a cross-frame cache of handles; an entity in it can be gone or stripped of its
 			// components (e.g. New Scene wiped the scene THIS frame, before the cache was rebuilt). Skip stale
 			// handles rather than Read a destroyed entity (EnTT asserts "Set does not contain entity").
-			if (!fc.Reg.valid(e) || !fc.Reg.all_of<TransformComponent, MeshComponent, MaterialComponent>(e))
+			if (!fc.Reg.valid(e) || !fc.Reg.all_of<WorldTransformComponent, MeshComponent, MaterialComponent>(e))
 			{
 				continue;
 			}
-			const auto& tr = fc.Reg.Read<TransformComponent>(e);
+			const auto& tr = fc.Reg.Read<WorldTransformComponent>(e);
 			const auto& mesh = fc.Reg.Read<MeshComponent>(e);
 			const auto& mat = fc.Reg.Read<MaterialComponent>(e);
 
@@ -661,13 +662,13 @@ namespace Snowstorm
 			                  // on the grey-vis specular fallback (GT compare render / spec disabled).
 			                  fc.Renderer.SetShadowSpecTexture(shadowSpecTextureIndex);
 
-			                  const glm::vec3 camPos = cam.Transform->Position;
+			                  const glm::vec3 camPos = cam.Position;
 			                  fc.Renderer.BeginScene(*cam.Rt, camPos, fc.Ctx, fc.FrameIndex, jittered, forceRasterShadow);
 
 			                  auto& assets = SingletonView<AssetManagerSingleton>();
 
 			                  DrawVisibleMeshes(fc, cam,
-			                                    [&](entt::entity e, const TransformComponent& tr, const MeshComponent& mesh, const MaterialComponent& mat)
+			                                    [&](entt::entity e, const WorldTransformComponent& tr, const MeshComponent& mesh, const MaterialComponent& mat)
 			                                    {
 				                                    // Per-instance albedo override rides the instance buffer (objects sharing
 				                                    // a material still batch). 0 = use the material's own albedo.
@@ -687,7 +688,7 @@ namespace Snowstorm
 				                                    }
 
 				                                    const glm::vec4 customData = mat.MaterialInstance->GetPerInstanceCustomData();
-				                                    fc.Renderer.DrawMesh(tr.GetTransformMatrix(), mesh.MeshInstance, mat.MaterialInstance, albedoIndex, customData);
+				                                    fc.Renderer.DrawMesh(tr.LocalToWorld, mesh.MeshInstance, mat.MaterialInstance, albedoIndex, customData);
 			                                    });
 
 			                  fc.Renderer.Flush();

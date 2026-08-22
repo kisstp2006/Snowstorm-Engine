@@ -9,6 +9,7 @@
 #include "Snowstorm/Components/DoNotSerializeComponent.hpp"
 #include "Snowstorm/Components/MeshComponent.hpp"
 #include "Snowstorm/Components/TransformComponent.hpp"
+#include "Snowstorm/World/Entity.hpp"
 #include "Snowstorm/Math/CameraFraming.hpp"
 #include "Snowstorm/Render/Mesh.hpp"
 
@@ -39,7 +40,7 @@ namespace Snowstorm
 				return false; // not resolved yet — skip until it streams in
 			}
 
-			out = TransformAABB(mesh->GetBounds().Box, reg.Read<TransformComponent>(e).GetTransformMatrix());
+			out = TransformAABB(mesh->GetBounds().Box, world.ComputeWorldMatrix(Entity{e, &world}));
 			return true;
 		}
 	}

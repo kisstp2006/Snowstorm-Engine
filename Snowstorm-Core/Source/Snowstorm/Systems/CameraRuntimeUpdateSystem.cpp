@@ -2,6 +2,7 @@
 
 #include "Snowstorm/Components/IDComponent.hpp"
 #include "Snowstorm/Components/TransformComponent.hpp"
+#include "Snowstorm/Components/WorldTransformComponent.hpp"
 #include "Snowstorm/Components/ViewportComponent.hpp"
 #include "Snowstorm/Components/CameraComponent.hpp"
 #include "Snowstorm/Components/CameraTargetComponent.hpp"
@@ -109,14 +110,14 @@ namespace Snowstorm
 
 		// Cameras that changed config/transform/target mapping this frame
 		const std::unordered_set<entt::entity> changedCamsA = reg.ChangedView<CameraComponent>();
-		const std::unordered_set<entt::entity> changedCamsB = reg.ChangedView<TransformComponent>();
+		const std::unordered_set<entt::entity> changedCamsB = reg.ChangedView<WorldTransformComponent>();
 		const std::unordered_set<entt::entity> changedCamsC = reg.ChangedView<CameraTargetComponent>();
 
 		// Cameras newly created/added (need runtime init)
-		const std::unordered_set<entt::entity> addedCams = reg.AddedView<CameraComponent, TransformComponent>();
+		const std::unordered_set<entt::entity> addedCams = reg.AddedView<CameraComponent, WorldTransformComponent>();
 
 		// Iterate all cameras; update only if dirty
-		const auto camView = reg.view<TransformComponent, CameraComponent, CameraTargetComponent>();
+		const auto camView = reg.view<WorldTransformComponent, CameraComponent, CameraTargetComponent>();
 
 		for (const auto camE : camView)
 		{
@@ -146,7 +147,7 @@ namespace Snowstorm
 				reg.emplace<CameraRuntimeComponent>(camE);
 			}
 
-			const auto& tr = camView.get<TransformComponent>(camE);
+			const auto& tr = camView.get<WorldTransformComponent>(camE);
 			const auto& cam = camView.get<CameraComponent>(camE);
 
 			const auto& vp = reg.Read<ViewportComponent>(ct.TargetViewportEntity);
@@ -163,8 +164,7 @@ namespace Snowstorm
 			// (prev = current), not here — so a static camera (which early-outs above and never reaches
 			// this line) still gets a fresh prev == current each frame instead of a stale value.
 
-			// TransformComponent in your code behaves like a matrix already
-			const glm::mat4 world = tr;
+			const glm::mat4& world = tr.LocalToWorld;
 			rt.View = glm::inverse(world);
 			rt.Projection = BuildProjection(cam, aspect);
 			rt.ViewProjection = rt.Projection * rt.View;

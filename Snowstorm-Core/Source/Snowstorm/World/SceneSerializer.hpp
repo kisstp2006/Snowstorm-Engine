@@ -30,5 +30,9 @@ namespace Snowstorm
 		// Recreate an entity from a JSON object produced by SerializeEntity, preserving its UUID (so an
 		// undone delete returns with its original identity). Returns the new Entity (invalid on failure).
 		static Entity DeserializeEntity(World& world, const nlohmann::json& in);
+
+	private:
+		// Attach `entity` under the "Parent" UUID in `in` if that entity exists; true when done or no parent.
+		static bool ResolveParent(World& world, Entity entity, const nlohmann::json& in);
 	};
 }

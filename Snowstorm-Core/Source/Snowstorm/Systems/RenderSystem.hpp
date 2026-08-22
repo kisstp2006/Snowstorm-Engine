@@ -27,7 +27,7 @@ namespace Snowstorm
 	struct CameraComponent;
 	struct CameraRuntimeComponent;
 	struct CameraTargetComponent;
-	struct TransformComponent;
+	struct WorldTransformComponent;
 	struct CameraVisibilityComponent;
 	struct RenderTargetComponent;
 	struct MeshComponent;
@@ -86,7 +86,7 @@ namespace Snowstorm
 		// differ only in the per-draw work, which they supply as `draw(entity, transform, mesh, material)`.
 		// Must be called inside an active BeginScene (both callers open one first).
 		void DrawVisibleMeshes(FrameContext& fc, const CameraPick& cam,
-		                       const std::function<void(entt::entity, const TransformComponent&,
+		                       const std::function<void(entt::entity, const WorldTransformComponent&,
 		                                                const MeshComponent&, const MaterialComponent&)>& draw);
 
 	private:

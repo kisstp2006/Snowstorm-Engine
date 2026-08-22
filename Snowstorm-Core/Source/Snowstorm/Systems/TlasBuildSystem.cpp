@@ -4,6 +4,7 @@
 #include "Snowstorm/Components/MaterialComponent.hpp"
 #include "Snowstorm/Components/MeshComponent.hpp"
 #include "Snowstorm/Components/TransformComponent.hpp"
+#include "Snowstorm/Components/WorldTransformComponent.hpp"
 #include "Snowstorm/Core/EngineCVars.hpp"
 #include "Snowstorm/Core/Log.hpp"
 #include "Snowstorm/Render/Buffer.hpp"
@@ -28,9 +29,9 @@ namespace Snowstorm
 		// Add/remove are one-shot events (spawn/despawn) — cheap to over-trigger, so left unfiltered.
 		if (!ChangedView<MeshComponent>().empty()) // mesh resolved / swapped
 			return true;
-		if (!InitView<MeshComponent>().empty() || !InitView<TransformComponent>().empty())
+		if (!InitView<MeshComponent>().empty() || !InitView<WorldTransformComponent>().empty())
 			return true;
-		if (!FiniView<MeshComponent>().empty() || !FiniView<TransformComponent>().empty())
+		if (!FiniView<MeshComponent>().empty() || !FiniView<WorldTransformComponent>().empty())
 			return true;
 
 		// A whole-entity DESTROY (editor delete, despawn) is tracked separately from component removal —
@@ -57,7 +58,7 @@ namespace Snowstorm
 		// every frame you move — so free-flying the view does NOT rebuild the TLAS (the camera isn't an
 		// instance; moving it changes no geometry).
 		const auto& reg = m_World->GetRegistry();
-		for (const entt::entity e : ChangedView<TransformComponent>())
+		for (const entt::entity e : ChangedView<WorldTransformComponent>())
 		{
 			if (reg.all_of<MeshComponent>(e))
 			{
@@ -129,7 +130,7 @@ namespace Snowstorm
 		const bool ommDevice = Renderer::IsOpacityMicromapSupported() && ommEnabled;
 		constexpr uint32_t kOmmSubdivisionLevel = 3;
 		uint32_t ommDeferred = 0; // cutout instances on the any-hit fallback this frame because their albedo isn't resident
-		for (auto view = reg.view<TransformComponent, MeshComponent>(); const entt::entity e : view)
+		for (auto view = reg.view<WorldTransformComponent, MeshComponent>(); const entt::entity e : view)
 		{
 			const auto& mc = reg.Read<MeshComponent>(e);
 			if (!mc.MeshInstance) // mesh not resolved yet (async load in flight)
@@ -176,8 +177,7 @@ namespace Snowstorm
 				continue;
 			}
 
-			const auto& tc = reg.Read<TransformComponent>(e);
-			const glm::mat4 model = tc.GetTransformMatrix();
+			const glm::mat4 model = reg.Read<WorldTransformComponent>(e).LocalToWorld;
 			instances.push_back({model, blas->GetDeviceAddress()});
 			instanceEntities.push_back(e);
 			// Masked geometry must traverse non-opaque so the alpha test runs. With an OMM the micromap drives

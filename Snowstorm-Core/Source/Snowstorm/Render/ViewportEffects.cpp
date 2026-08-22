@@ -5,7 +5,7 @@
 #include "Snowstorm/Components/MeshComponent.hpp"
 #include "Snowstorm/Components/PrevTransformComponent.hpp"
 #include "Snowstorm/Components/RenderTargetComponent.hpp"
-#include "Snowstorm/Components/TransformComponent.hpp"
+#include "Snowstorm/Components/WorldTransformComponent.hpp"
 #include "Snowstorm/Core/EngineCVars.hpp"
 #include "Snowstorm/ECS/TrackedRegistry.hpp"
 #include "Snowstorm/Render/FrameData.hpp"
@@ -103,7 +103,7 @@ namespace Snowstorm
 				const FrameData& fd = fc.Renderer.GetFrameData();
 				PathTracePass::Params p{};
 				p.InvViewProj = glm::inverse(vp);
-				p.CameraPosition = v.Cam.Transform->Position;
+				p.CameraPosition = v.Cam.Position;
 				// Sun as a finite disk: cos of its angular RADIUS (render.shadow.sun_angle_deg is the DIAMETER),
 				// so the reflected sun on smooth floors converges to a soft highlight instead of a hot delta dot.
 				p.SunCosThetaMax = glm::cos(glm::radians(0.5f * CVars::ShadowSunAngleDeg.Get()));
@@ -201,13 +201,13 @@ namespace Snowstorm
 				                  .Target = gbuf,
 				                  .Execute = [this, &fc, cam, colorFmt, depthFmt, viewProj](CommandContext& c)
 				                  {
-					                  fc.Renderer.BeginScene(*cam.Rt, cam.Transform->Position, fc.Ctx, fc.FrameIndex);
+					                  fc.Renderer.BeginScene(*cam.Rt, cam.Position, fc.Ctx, fc.FrameIndex);
 
 					                  m_Owner.DrawVisibleMeshes(fc, cam,
-					                                            [&](entt::entity, const TransformComponent& tr, const MeshComponent& mesh, const MaterialComponent& mat)
+					                                            [&](entt::entity, const WorldTransformComponent& tr, const MeshComponent& mesh, const MaterialComponent& mat)
 					                                            {
-						                                            fc.Renderer.DrawMesh(tr.GetTransformMatrix(), mesh.MeshInstance, mat.MaterialInstance, 0,
-						                                                                 glm::vec4(0.0f), tr.GetTransformMatrix());
+						                                            fc.Renderer.DrawMesh(tr.LocalToWorld, mesh.MeshInstance, mat.MaterialInstance, 0,
+						                                                                 glm::vec4(0.0f), tr.LocalToWorld);
 					                                            });
 
 					                  m_Pass.RecordDepthNormal(fc.Renderer, fc.FrameIndex, colorFmt, depthFmt, viewProj);
@@ -272,7 +272,7 @@ namespace Snowstorm
 				// hemisphere origins — banded self-occlusion / "black stripes", worst moving backward (#133 f/u).
 				FrameData frameData = fc.Renderer.GetFrameData();
 				frameData.ViewProjection = v.Cam.Rt->JitteredViewProjection; // match the jittered DepthNormal G-buffer + forward
-				frameData.CameraPosition = v.Cam.Transform->Position;
+				frameData.CameraPosition = v.Cam.Position;
 				const auto frameCounter = static_cast<uint32_t>(fc.Renderer.GetFrameCounter());
 
 				// Compute pass: reads the G-buffer + depth (Sampled), writes GITarget (Storage). The graph applies
@@ -805,7 +805,7 @@ namespace Snowstorm
 				// THIS frame's jittered camera VP (matches the jittered DepthNormal G-buffer + forward), not the
 				// stale GetFrameData().ViewProjection — same fix as GI/AO/RT-reflection (#133 follow-up).
 				const glm::mat4 viewProj = v.Cam.Rt->JitteredViewProjection;
-				const glm::vec3 camPos = v.Cam.Transform->Position;
+				const glm::vec3 camPos = v.Cam.Position;
 				const float reflRange = CVars::ReflectionRange.Get();
 				const float nearPlane = v.Cam.Cam ? v.Cam.Cam->PerspectiveNear : 0.1f;
 				const float farPlane = v.Cam.Cam ? v.Cam.Cam->PerspectiveFar : 500.0f;
@@ -872,7 +872,7 @@ namespace Snowstorm
 				const Ref<TextureView> depthView = gbufDesc.DepthAttachment->View;      // fp32 D32 depth
 				const Ref<TextureView> shadowView = v.RT.ShadowTargetView;
 				const Ref<TextureView> shadowSpecView = v.RT.ShadowSpecTargetView; // demodulated specular output
-				const glm::vec3 camPos = v.Cam.Transform->Position;                // world-space camera pos for V in the specular BRDF
+				const glm::vec3 camPos = v.Cam.Position;                // world-space camera pos for V in the specular BRDF
 				// Reconstruct from THIS frame's JITTERED camera VP (the matrix the jittered DepthNormal prepass +
 				// the forward color pass both use, so effect and geometry silhouettes align), NOT GetFrameData().
 				// ViewProjection which still holds the previous frame's forward matrix at build time — see AOEffect.
@@ -1250,7 +1250,7 @@ namespace Snowstorm
 				// stripes" (worst moving backward). See the GI effect above (#133 follow-up).
 				FrameData frameData = fc.Renderer.GetFrameData();
 				frameData.ViewProjection = v.Cam.Rt->JitteredViewProjection; // match the jittered DepthNormal G-buffer + forward
-				frameData.CameraPosition = v.Cam.Transform->Position;
+				frameData.CameraPosition = v.Cam.Position;
 				const auto frameCounter = static_cast<uint32_t>(fc.Renderer.GetFrameCounter());
 
 				fc.Graph.AddPass({.Name = "Reflection" + v.Suffix,
@@ -1423,20 +1423,20 @@ namespace Snowstorm
 				                  .Target = velTarget,
 				                  .Execute = [this, &fc, cam, velColorFmt, velDepthFmt, viewProj, prevViewProj](CommandContext& c)
 				                  {
-					                  fc.Renderer.BeginScene(*cam.Rt, cam.Transform->Position, fc.Ctx, fc.FrameIndex);
+					                  fc.Renderer.BeginScene(*cam.Rt, cam.Position, fc.Ctx, fc.FrameIndex);
 
 					                  m_Owner.DrawVisibleMeshes(fc, cam,
-					                                            [&](entt::entity e, const TransformComponent& tr, const MeshComponent& mesh, const MaterialComponent& mat)
+					                                            [&](entt::entity e, const WorldTransformComponent& tr, const MeshComponent& mesh, const MaterialComponent& mat)
 					                                            {
 						                                            // Last frame's world matrix; PrevTransformSnapshotSystem writes it
 						                                            // end-of-frame. Missing (object created this frame) -> use current
 						                                            // => zero velocity (correct).
-						                                            glm::mat4 prevModel = tr.GetTransformMatrix();
+						                                            glm::mat4 prevModel = tr.LocalToWorld;
 						                                            if (const auto* pt = fc.Reg.try_get_const<PrevTransformComponent>(e))
 						                                            {
 							                                            prevModel = pt->PrevModel;
 						                                            }
-						                                            fc.Renderer.DrawMesh(tr.GetTransformMatrix(), mesh.MeshInstance, mat.MaterialInstance, 0,
+						                                            fc.Renderer.DrawMesh(tr.LocalToWorld, mesh.MeshInstance, mat.MaterialInstance, 0,
 						                                                                 glm::vec4(0.0f), prevModel);
 					                                            });
 
@@ -1551,9 +1551,9 @@ namespace Snowstorm
 					                  .Target = prepassTarget,
 					                  .Execute = [this, &fc, cam, depthFmt](CommandContext&)
 					                  {
-						                  fc.Renderer.BeginScene(*cam.Rt, cam.Transform->Position, fc.Ctx, fc.FrameIndex, /*jittered*/ true);
+						                  fc.Renderer.BeginScene(*cam.Rt, cam.Position, fc.Ctx, fc.FrameIndex, /*jittered*/ true);
 						                  m_Owner.DrawVisibleMeshes(fc, cam,
-						                                            [&](entt::entity, const TransformComponent& tr, const MeshComponent& mesh, const MaterialComponent& mat)
+						                                            [&](entt::entity, const WorldTransformComponent& tr, const MeshComponent& mesh, const MaterialComponent& mat)
 						                                            {
 							                                            // OPAQUE-ONLY z-prepass: skip alpha-cutout (MASK). Its forward coverage
 							                                            // can disagree with this separate depth pass at cutout edges, so writing
@@ -1564,8 +1564,8 @@ namespace Snowstorm
 							                                            {
 								                                            return;
 							                                            }
-							                                            fc.Renderer.DrawMesh(tr.GetTransformMatrix(), mesh.MeshInstance, mat.MaterialInstance, 0,
-							                                                                 glm::vec4(0.0f), tr.GetTransformMatrix());
+							                                            fc.Renderer.DrawMesh(tr.LocalToWorld, mesh.MeshInstance, mat.MaterialInstance, 0,
+							                                                                 glm::vec4(0.0f), tr.LocalToWorld);
 						                                            });
 						                  m_DepthPrepass.RecordDepth(fc.Renderer, fc.FrameIndex, depthFmt, cam.Rt->JitteredViewProjection);
 					                  }});

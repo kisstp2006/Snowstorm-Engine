@@ -132,6 +132,9 @@ namespace Snowstorm
 	{
 		bool Serializable = true;
 		bool DrawInEditor = true;
+		// Whether entity duplication copies this component (CopyFn). Off for derived/runtime state
+		// (world matrices, hierarchy links, resolved GPU handles) that the owning system rebuilds.
+		bool Copyable = true;
 		std::function<void(Entity)> DrawFnOverride = nullptr;
 	};
 
@@ -243,12 +246,13 @@ namespace Snowstorm
 			    return rttr::instance(component);
 		    },
 
-		    .CopyFn = [](Entity src, Entity dst)
-		    {
+		    .CopyFn = opts.Copyable ? std::function<void(Entity, Entity)>([](Entity src, Entity dst)
+		                                                               {
 				if (src.HasComponent<T>())
 				{
 					dst.AddOrReplaceComponent<T>(src.GetComponent<T>());
-				} },
+				} })
+		                            : nullptr,
 
 		    .RemoveFn = [](Entity entity)
 		    {

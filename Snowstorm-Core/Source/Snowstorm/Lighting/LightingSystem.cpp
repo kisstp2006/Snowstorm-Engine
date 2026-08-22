@@ -4,6 +4,7 @@
 #include "LightingUniforms.hpp"
 
 #include "Snowstorm/Components/TransformComponent.hpp"
+#include "Snowstorm/Components/WorldTransformComponent.hpp"
 #include "Snowstorm/Core/EngineCVars.hpp"
 #include "Snowstorm/Core/Log.hpp"
 #include "Snowstorm/Render/Passes/ShadowPass.hpp"
@@ -84,7 +85,7 @@ namespace Snowstorm
 		int nextPointShadowSlot = 0; // next free point-shadow payload slot (6 atlas tiles each)
 		bool droppedPoint = false;
 		bool droppedPointShadow = false; // a casting point exceeded the shadow budget (renders unshadowed)
-		for (auto pointView = View<PointLightComponent, TransformComponent>(); auto entity : pointView)
+		for (auto pointView = View<PointLightComponent, WorldTransformComponent>(); auto entity : pointView)
 		{
 			if (lightData.PointCount >= MAX_POINT_LIGHTS)
 			{
@@ -96,7 +97,7 @@ namespace Snowstorm
 			{
 				continue;
 			}
-			const auto& transform = pointView.get<TransformComponent>(entity);
+			const glm::vec3 lightPosition = glm::vec3(pointView.get<WorldTransformComponent>(entity).LocalToWorld[3]);
 
 			// Assign a shadow payload slot if this omni casts, shadows are globally enabled, and a slot is
 			// free (cap = MAX_SHADOW_POINTS -- each costs 6 depth passes). ShadowSlot < 0 => unshadowed. Fill
@@ -122,7 +123,7 @@ namespace Snowstorm
 						const int tile = shadowSlot * 6 + face;
 						const int col = tile % static_cast<int>(ShadowPass::kPointAtlasCols);
 						const int row = tile / static_cast<int>(ShadowPass::kPointAtlasCols);
-						payload.Face[face] = ShadowPass::ComputePointFaceViewProj(transform.Position, face, light.Range);
+						payload.Face[face] = ShadowPass::ComputePointFaceViewProj(lightPosition, face, light.Range);
 						payload.Rect[face] = {static_cast<float>(col) * inv, static_cast<float>(row) * inv, inv, inv};
 					}
 				}
@@ -135,7 +136,7 @@ namespace Snowstorm
 			}
 
 			lightData.PointLights[lightData.PointCount++] = {
-			    .Position = transform.Position,
+			    .Position = lightPosition,
 			    .Range = light.Range,
 			    .Color = light.Color,
 			    .Intensity = light.Intensity,
@@ -161,7 +162,7 @@ namespace Snowstorm
 		// so cos(inner) >= cos(outer) and the falloff denominator stays positive.
 		int nextShadowTile = 0; // next free atlas tile for a shadow-casting spot
 		bool droppedSpot = false;
-		for (auto spotView = View<SpotLightComponent, TransformComponent>(); auto entity : spotView)
+		for (auto spotView = View<SpotLightComponent, WorldTransformComponent>(); auto entity : spotView)
 		{
 			if (lightData.SpotCount >= MAX_SPOT_LIGHTS)
 			{
@@ -173,9 +174,10 @@ namespace Snowstorm
 			{
 				continue;
 			}
-			const auto& transform = spotView.get<TransformComponent>(entity);
+			const auto& world = spotView.get<WorldTransformComponent>(entity).LocalToWorld;
+			const glm::vec3 lightPosition = glm::vec3(world[3]);
 
-			const glm::mat3 rot = glm::mat3(transform.GetTransformMatrix());
+			const glm::mat3 rot = glm::mat3(world);
 			const glm::vec3 forward = glm::normalize(rot * glm::vec3(0.0f, 0.0f, -1.0f));
 
 			const float inner = glm::radians(light.InnerAngleDeg);
@@ -197,7 +199,7 @@ namespace Snowstorm
 			else if (shadowsEnabled && light.CastShadows && nextShadowTile < ShadowPass::kMaxShadowSpots)
 			{
 				shadowIndex = nextShadowTile++;
-				shadowViewProj = ShadowPass::ComputeSpotViewProj(transform.Position, forward, outer, light.Range);
+				shadowViewProj = ShadowPass::ComputeSpotViewProj(lightPosition, forward, outer, light.Range);
 				constexpr float inv = 1.0f / static_cast<float>(ShadowPass::kSpotAtlasCols);
 				const int col = shadowIndex % static_cast<int>(ShadowPass::kSpotAtlasCols);
 				const int row = shadowIndex / static_cast<int>(ShadowPass::kSpotAtlasCols);
@@ -205,7 +207,7 @@ namespace Snowstorm
 			}
 
 			lightData.SpotLights[lightData.SpotCount++] = {
-			    .Position = transform.Position,
+			    .Position = lightPosition,
 			    .Range = light.Range,
 			    .Color = light.Color,
 			    .Intensity = light.Intensity,

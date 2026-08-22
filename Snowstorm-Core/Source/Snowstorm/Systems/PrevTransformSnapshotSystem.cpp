@@ -3,7 +3,7 @@
 #include "Snowstorm/Components/CameraRuntimeComponent.hpp"
 #include "Snowstorm/Components/MeshComponent.hpp"
 #include "Snowstorm/Components/PrevTransformComponent.hpp"
-#include "Snowstorm/Components/TransformComponent.hpp"
+#include "Snowstorm/Components/WorldTransformComponent.hpp"
 #include "Snowstorm/World/World.hpp"
 
 #include <entt/entt.hpp>
@@ -17,11 +17,11 @@ namespace Snowstorm
 		// Meshes: snapshot this frame's world matrix into PrevModel. Ensure<> creates the component the
 		// first frame an object exists (PrevModel starts == current -> zero velocity, correct); thereafter
 		// we write through the untracked get<> so we don't mark it Changed every single frame.
-		const auto meshView = reg.view<TransformComponent, MeshComponent>();
+		const auto meshView = reg.view<WorldTransformComponent, MeshComponent>();
 		for (const auto e : meshView)
 		{
 			auto& prev = reg.Ensure<PrevTransformComponent>(e);
-			prev.PrevModel = meshView.get<TransformComponent>(e).GetTransformMatrix();
+			prev.PrevModel = meshView.get<WorldTransformComponent>(e).LocalToWorld;
 		}
 
 		// Cameras: snapshot this frame's VP so a moving-then-stopped camera reports zero motion next frame

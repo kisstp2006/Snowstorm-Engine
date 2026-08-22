@@ -17,6 +17,7 @@
 
 #include <nlohmann/json.hpp>
 #include <fstream>
+#include <functional>
 #include <sstream>
 
 #include "Snowstorm/Components/CameraComponent.hpp"
@@ -196,6 +197,12 @@ namespace Snowstorm
 		out = json::object();
 		out["UUID"] = entity.GetComponent<IDComponent>().Id.ToString();
 		out["Name"] = entity.GetComponent<TagComponent>().Tag;
+		// Hierarchy is structural (like UUID/Name), not a component: the parent is referenced by UUID and
+		// the links are rebuilt by World::SetParent on load (see ResolveParent).
+		if (const Entity parent = entity.GetWorld()->GetParent(entity))
+		{
+			out["Parent"] = parent.GetComponent<IDComponent>().Id.ToString();
+		}
 
 		json comps = json::object();
 
@@ -235,6 +242,21 @@ namespace Snowstorm
 		return true;
 	}
 
+	bool SceneSerializer::ResolveParent(World& world, const Entity entity, const json& entJ)
+	{
+		if (!entJ.contains("Parent") || !entJ["Parent"].is_string())
+		{
+			return true; // root
+		}
+		const Entity parent = world.FindEntityByUUID(UUID::FromString(entJ["Parent"].get<std::string>()));
+		if (!parent)
+		{
+			return false; // not created yet (scene load resolves in a second pass) or genuinely missing
+		}
+		// Local values in the file are already relative to the parent: keep them (keepWorld = false).
+		return world.SetParent(entity, parent, /*keepWorld*/ false);
+	}
+
 	Entity SceneSerializer::DeserializeEntity(World& world, const json& entJ)
 	{
 		const std::string uuidStr = entJ.value("UUID", "0");
@@ -244,6 +266,7 @@ namespace Snowstorm
 
 		if (!entJ.contains("Components") || !entJ["Components"].is_object())
 		{
+			ResolveParent(world, entity, entJ);
 			return entity;
 		}
 
@@ -289,6 +312,10 @@ namespace Snowstorm
 			JsonToRttrInstance(compData, inst);
 		}
 
+		// Single-entity callers (undo redo, duplicate) have the parent alive already; a scene load
+		// re-runs this for every entity after all of them exist (file order is not parent-first).
+		ResolveParent(world, entity, entJ);
+
 		return entity;
 	}
 
@@ -300,6 +327,24 @@ namespace Snowstorm
 
 		auto& reg = world.GetRegistry();
 
+		// Roots in registry order, each followed by its subtree depth-first (sibling order = hierarchy
+		// order), so a saved file is deterministic and children always follow their parent.
+		World& mutableWorld = const_cast<World&>(world);
+		std::function<void(Entity)> writeSubtree = [&](const Entity entity)
+		{
+			json entJ;
+			if (SerializeEntity(entity, entJ))
+			{
+				root["Entities"].push_back(std::move(entJ));
+			}
+			mutableWorld.ForEachChild(entity, [&](const Entity child)
+			                          {
+				if (!reg.any_of<DoNotSerializeComponent>(child.Handle()))
+				{
+					writeSubtree(child);
+				} });
+		};
+
 		auto view = reg.view<IDComponent, TagComponent>();
 		for (const entt::entity e : view)
 		{
@@ -309,14 +354,12 @@ namespace Snowstorm
 			{
 				continue;
 			}
-
-			Entity entity{e, const_cast<World*>(&world)};
-
-			json entJ;
-			if (SerializeEntity(entity, entJ))
+			Entity entity{e, &mutableWorld};
+			if (mutableWorld.GetParent(entity))
 			{
-				root["Entities"].push_back(std::move(entJ));
+				continue; // written under its root
 			}
+			writeSubtree(entity);
 		}
 
 		return root.dump(2);
@@ -339,9 +382,23 @@ namespace Snowstorm
 			return false;
 		}
 
+		std::vector<std::pair<Entity, const json*>> unresolved;
 		for (const auto& entJ : root["Entities"])
 		{
-			DeserializeEntity(world, entJ);
+			Entity entity = DeserializeEntity(world, entJ);
+			if (entJ.contains("Parent") && !world.GetParent(entity))
+			{
+				unresolved.emplace_back(entity, &entJ);
+			}
+		}
+		// Second pass: parents that appeared later in the file than their children.
+		for (const auto& [entity, entJ] : unresolved)
+		{
+			if (!ResolveParent(world, entity, *entJ))
+			{
+				SS_CORE_WARN("SceneSerializer: entity '{}' references a missing parent {}; left at root.",
+				             entity.GetComponent<TagComponent>().Tag, (*entJ)["Parent"].get<std::string>());
+			}
 		}
 
 		return true;

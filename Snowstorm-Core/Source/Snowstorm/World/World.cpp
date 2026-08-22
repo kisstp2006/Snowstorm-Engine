@@ -1,5 +1,9 @@
 #include "World.hpp"
 
+#include "Snowstorm/Components/HierarchyComponent.hpp"
+#include "Snowstorm/Components/TransformComponent.hpp"
+#include "Snowstorm/Math/Transform.hpp"
+
 #include "Entity.hpp"
 
 #include "Snowstorm/ECS/SystemManager.hpp"
@@ -92,6 +96,10 @@ namespace Snowstorm
 		{
 			return;
 		}
+		// Destroying a parent destroys its subtree (Unity/Godot semantics); queue children first so the
+		// flush unlinks leaves before their parents go away.
+		ForEachChild(entity, [this](const Entity child)
+		             { DestroyEntity(child); });
 		m_PendingDestroy.push_back(entity.Handle());
 	}
 
@@ -107,10 +115,209 @@ namespace Snowstorm
 		{
 			if (reg.valid(e))
 			{
+				UnlinkFromParent(e); // a surviving parent must not keep a dangling child link
 				reg.destroy(e);
 			}
 		}
 		m_PendingDestroy.clear();
+	}
+
+	// ---------------------------------------------------------------------
+	// Transform hierarchy
+	// ---------------------------------------------------------------------
+
+	void World::UnlinkFromParent(const entt::entity child) const
+	{
+		auto& reg = m_SystemManager->GetRegistry();
+		auto* h = reg.try_get<HierarchyComponent>(child);
+		if (!h || h->Parent == entt::null)
+		{
+			return;
+		}
+		auto& hc = reg.get<HierarchyComponent>(child);
+		if (reg.valid(hc.Parent))
+		{
+			auto& parent = reg.Write<HierarchyComponent>(hc.Parent);
+			if (parent.FirstChild == child)
+			{
+				parent.FirstChild = hc.NextSibling;
+			}
+		}
+		if (hc.PrevSibling != entt::null && reg.valid(hc.PrevSibling))
+		{
+			reg.Write<HierarchyComponent>(hc.PrevSibling).NextSibling = hc.NextSibling;
+		}
+		if (hc.NextSibling != entt::null && reg.valid(hc.NextSibling))
+		{
+			reg.Write<HierarchyComponent>(hc.NextSibling).PrevSibling = hc.PrevSibling;
+		}
+		hc.Parent = entt::null;
+		hc.NextSibling = entt::null;
+		hc.PrevSibling = entt::null;
+		reg.MarkChanged<HierarchyComponent>(child);
+	}
+
+	void World::SetDepthRecursive(const entt::entity root, const uint32_t depth) const
+	{
+		auto& reg = m_SystemManager->GetRegistry();
+		auto& h = reg.Write<HierarchyComponent>(root);
+		h.Depth = depth;
+		for (entt::entity c = h.FirstChild; c != entt::null; c = reg.Read<HierarchyComponent>(c).NextSibling)
+		{
+			SetDepthRecursive(c, depth + 1);
+		}
+	}
+
+	bool World::IsDescendantOf(const Entity entity, const Entity ancestor) const
+	{
+		if (!entity || !ancestor)
+		{
+			return false;
+		}
+		auto& reg = m_SystemManager->GetRegistry();
+		entt::entity cur = entity.Handle();
+		while (cur != entt::null)
+		{
+			const auto* h = reg.try_get_const<HierarchyComponent>(cur);
+			if (!h)
+			{
+				return false;
+			}
+			if (h->Parent == ancestor.Handle())
+			{
+				return true;
+			}
+			cur = h->Parent;
+		}
+		return false;
+	}
+
+	Entity World::GetParent(const Entity entity) const
+	{
+		if (!entity)
+		{
+			return {};
+		}
+		const auto* h = m_SystemManager->GetRegistry().try_get_const<HierarchyComponent>(entity.Handle());
+		if (!h || h->Parent == entt::null)
+		{
+			return {};
+		}
+		return Entity{h->Parent, const_cast<World*>(this)};
+	}
+
+	void World::ForEachChild(const Entity parent, const std::function<void(Entity)>& fn) const
+	{
+		if (!parent)
+		{
+			return;
+		}
+		auto& reg = m_SystemManager->GetRegistry();
+		const auto* h = reg.try_get_const<HierarchyComponent>(parent.Handle());
+		if (!h)
+		{
+			return;
+		}
+		// Snapshot first: the callback may reparent/destroy (which relinks the list we're walking).
+		std::vector<entt::entity> children;
+		for (entt::entity c = h->FirstChild; c != entt::null; c = reg.Read<HierarchyComponent>(c).NextSibling)
+		{
+			children.push_back(c);
+		}
+		for (const entt::entity c : children)
+		{
+			fn(Entity{c, const_cast<World*>(this)});
+		}
+	}
+
+	glm::mat4 World::ComputeWorldMatrix(const Entity entity) const
+	{
+		auto& reg = m_SystemManager->GetRegistry();
+		if (!entity || !reg.any_of<TransformComponent>(entity.Handle()))
+		{
+			return glm::mat4(1.0f);
+		}
+		glm::mat4 world = reg.Read<TransformComponent>(entity.Handle()).GetTransformMatrix();
+		const auto* h = reg.try_get_const<HierarchyComponent>(entity.Handle());
+		for (entt::entity p = h ? h->Parent : entt::null; p != entt::null;)
+		{
+			world = reg.Read<TransformComponent>(p).GetTransformMatrix() * world;
+			const auto* ph = reg.try_get_const<HierarchyComponent>(p);
+			p = ph ? ph->Parent : entt::null;
+		}
+		return world;
+	}
+
+	bool World::SetParent(const Entity child, const Entity parent, const bool keepWorld)
+	{
+		auto& reg = m_SystemManager->GetRegistry();
+		if (!child || !reg.any_of<TransformComponent>(child.Handle()))
+		{
+			SS_CORE_WARN("World::SetParent: child is invalid or has no TransformComponent.");
+			return false;
+		}
+		if (parent && (parent == child || !reg.any_of<TransformComponent>(parent.Handle()) || IsDescendantOf(parent, child)))
+		{
+			SS_CORE_WARN("World::SetParent: rejected (self-parent, parent without TransformComponent, or cycle).");
+			return false;
+		}
+
+		const entt::entity newParent = parent ? parent.Handle() : entt::null;
+		if (const auto* h = reg.try_get_const<HierarchyComponent>(child.Handle()); h && h->Parent == newParent)
+		{
+			return true; // already there
+		}
+
+		const glm::mat4 childWorld = keepWorld ? ComputeWorldMatrix(child) : glm::mat4(1.0f);
+
+		reg.Ensure<HierarchyComponent>(child.Handle());
+		UnlinkFromParent(child.Handle());
+
+		uint32_t depth = 0;
+		if (newParent != entt::null)
+		{
+			auto& ph = reg.Ensure<HierarchyComponent>(newParent);
+			// Append as last child (insertion order == sibling order).
+			entt::entity last = ph.FirstChild;
+			while (last != entt::null && reg.Read<HierarchyComponent>(last).NextSibling != entt::null)
+			{
+				last = reg.Read<HierarchyComponent>(last).NextSibling;
+			}
+			auto& ch = reg.Write<HierarchyComponent>(child.Handle());
+			ch.Parent = newParent;
+			ch.PrevSibling = last;
+			ch.NextSibling = entt::null;
+			if (last == entt::null)
+			{
+				reg.Write<HierarchyComponent>(newParent).FirstChild = child.Handle();
+			}
+			else
+			{
+				reg.Write<HierarchyComponent>(last).NextSibling = child.Handle();
+			}
+			depth = reg.Read<HierarchyComponent>(newParent).Depth + 1;
+		}
+		SetDepthRecursive(child.Handle(), depth);
+
+		if (keepWorld)
+		{
+			const glm::mat4 parentWorld = parent ? ComputeWorldMatrix(parent) : glm::mat4(1.0f);
+			glm::vec3 t, s;
+			glm::quat r;
+			if (DecomposeTRS(glm::inverse(parentWorld) * childWorld, t, r, s))
+			{
+				reg.patch<TransformComponent>(child.Handle(), [&](TransformComponent& tr)
+				                              {
+					tr.Position = t;
+					tr.Rotation = r;
+					tr.Scale = s; });
+			}
+		}
+		else
+		{
+			reg.MarkChanged<TransformComponent>(child.Handle()); // world matrix changes even if local didn't
+		}
+		return true;
 	}
 
 	void World::Clear() const

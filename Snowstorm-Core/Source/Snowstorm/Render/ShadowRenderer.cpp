@@ -2,7 +2,7 @@
 
 #include "Snowstorm/Components/MaterialComponent.hpp"
 #include "Snowstorm/Components/MeshComponent.hpp"
-#include "Snowstorm/Components/TransformComponent.hpp"
+#include "Snowstorm/Components/WorldTransformComponent.hpp"
 #include "Snowstorm/Components/VisibilityComponents.hpp"
 #include "Snowstorm/Core/EngineCVars.hpp"
 #include "Snowstorm/ECS/TrackedRegistry.hpp"
@@ -73,7 +73,7 @@ namespace Snowstorm
 				                  r.BeginScene(lightCam, glm::vec3(0.0f), fc.Ctx, fc.FrameIndex);
 
 				                  // Accumulate ALL renderable meshes as shadow casters (resolved instances).
-				                  for (const auto casters = reg.view<const TransformComponent, const MeshComponent, const MaterialComponent, const VisibilityComponent>();
+				                  for (const auto casters = reg.view<const WorldTransformComponent, const MeshComponent, const MaterialComponent, const VisibilityComponent>();
 				                       const auto e : casters)
 				                  {
 					                  const auto& mesh = reg.Read<MeshComponent>(e);
@@ -82,7 +82,7 @@ namespace Snowstorm
 					                  {
 						                  continue;
 					                  }
-					                  r.DrawMesh(reg.Read<TransformComponent>(e).GetTransformMatrix(),
+					                  r.DrawMesh(reg.Read<WorldTransformComponent>(e).LocalToWorld,
 					                             mesh.MeshInstance, mat.MaterialInstance);
 				                  }
 
@@ -138,7 +138,7 @@ namespace Snowstorm
 				                  lightCam.ViewProjection = glm::mat4(1.0f);
 				                  r.BeginScene(lightCam, glm::vec3(0.0f), fc.Ctx, fc.FrameIndex);
 
-				                  for (const auto casters = reg.view<const TransformComponent, const MeshComponent, const MaterialComponent, const VisibilityComponent>();
+				                  for (const auto casters = reg.view<const WorldTransformComponent, const MeshComponent, const MaterialComponent, const VisibilityComponent>();
 				                       const auto e : casters)
 				                  {
 					                  const auto& mesh = reg.Read<MeshComponent>(e);
@@ -147,7 +147,7 @@ namespace Snowstorm
 					                  {
 						                  continue;
 					                  }
-					                  r.DrawMesh(reg.Read<TransformComponent>(e).GetTransformMatrix(),
+					                  r.DrawMesh(reg.Read<WorldTransformComponent>(e).LocalToWorld,
 					                             mesh.MeshInstance, mat.MaterialInstance);
 				                  }
 
@@ -208,7 +208,7 @@ namespace Snowstorm
 			                  lightCam.ViewProjection = glm::mat4(1.0f);
 			                  r.BeginScene(lightCam, glm::vec3(0.0f), fc.Ctx, fc.FrameIndex);
 
-			                  for (const auto casters = reg.view<const TransformComponent, const MeshComponent, const MaterialComponent, const VisibilityComponent>();
+			                  for (const auto casters = reg.view<const WorldTransformComponent, const MeshComponent, const MaterialComponent, const VisibilityComponent>();
 			                       const auto e : casters)
 			                  {
 				                  const auto& mesh = reg.Read<MeshComponent>(e);
@@ -217,7 +217,7 @@ namespace Snowstorm
 				                  {
 					                  continue;
 				                  }
-				                  r.DrawMesh(reg.Read<TransformComponent>(e).GetTransformMatrix(),
+				                  r.DrawMesh(reg.Read<WorldTransformComponent>(e).LocalToWorld,
 				                             mesh.MeshInstance, mat.MaterialInstance);
 			                  }
 
