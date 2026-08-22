@@ -77,7 +77,7 @@ namespace Snowstorm
 		{
 			const GPUDirectionalLight& sun = lights.Lights[0];
 			HashBytes(h, &sun.Direction, sizeof(sun.Direction));
-			HashBytes(h, &sun.Color, sizeof(sun.Color));
+			HashBytes(h, &sun.Radiance, sizeof(sun.Radiance));
 			HashBytes(h, &sun.Intensity, sizeof(sun.Intensity));
 		}
 

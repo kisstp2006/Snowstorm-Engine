@@ -367,11 +367,6 @@ namespace Snowstorm::CVars
 	[[nodiscard]] bool ShadowDenoiseActive();
 	[[nodiscard]] int ClampedShadowDenoiseIterations();
 
-	// RT soft-shadow light sizes (#118): the sun's angular diameter (degrees; real sun ~0.53) and a local
-	// light's physical source radius (world units). Larger => wider penumbra. Only used by the RT soft path.
-	extern CVar<float> ShadowSunAngleDeg;
-	extern CVar<float> ShadowSourceRadius;
-
 	// Image-based lighting: bake irradiance/prefiltered cubes from the sky on compute and use them for
 	// ambient (#52). On by default; turn off to fall back to the analytic hemisphere ambient.
 	extern CVar<bool> IBL;

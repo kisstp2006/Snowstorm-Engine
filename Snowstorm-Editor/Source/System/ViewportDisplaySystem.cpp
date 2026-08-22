@@ -56,7 +56,7 @@ namespace Snowstorm
 			{
 				return wt->LocalToWorld;
 			}
-			return reg.Read<TransformComponent>(e).GetTransformMatrix();
+			return reg.Read<TransformComponent>(e).GetTransform();
 		}
 
 		glm::vec3 CachedWorldPosition(TrackedRegistry& reg, const entt::entity e)
@@ -327,7 +327,7 @@ namespace Snowstorm
 				const auto& light = reg.Read<PointLightComponent>(e);
 				const glm::vec3 pos = CachedWorldPosition(reg, e);
 				const bool isSelected = e == selectedHandle;
-				const ImU32 col = LightGizmoColor(light.Color, isSelected);
+				const ImU32 col = LightGizmoColor(light.Radiance, isSelected);
 				DrawLightIcon(dl, pos, viewProj, rectMin, rectSize, col, LightIconKind::Point);
 				if (isSelected)
 				{
@@ -344,7 +344,7 @@ namespace Snowstorm
 				const glm::mat4 spotWorld = CachedWorldMatrix(reg, e);
 				const glm::vec3 apex = glm::vec3(spotWorld[3]);
 				const bool isSelected = e == selectedHandle;
-				const ImU32 col = LightGizmoColor(light.Color, isSelected);
+				const ImU32 col = LightGizmoColor(light.Radiance, isSelected);
 
 				// Icon at the spot's apex (its origin) -- the click target, always drawn.
 				DrawLightIcon(dl, apex, viewProj, rectMin, rectSize, col, LightIconKind::Spot);
@@ -381,7 +381,7 @@ namespace Snowstorm
 				const auto& light = reg.Read<DirectionalLightComponent>(e);
 				const glm::vec3 pos = CachedWorldPosition(reg, e);
 				const bool isSelected = e == selectedHandle;
-				const ImU32 col = LightGizmoColor(light.Color, isSelected);
+				const ImU32 col = LightGizmoColor(light.Radiance, isSelected);
 				DrawLightIcon(dl, pos, viewProj, rectMin, rectSize, col, LightIconKind::Directional);
 
 				if (isSelected && glm::length(light.Direction) > 1e-4f)
@@ -611,8 +611,8 @@ namespace Snowstorm
 					{
 						selected.PatchComponent<TransformComponent>([&](TransformComponent& t)
 						                                            {
-							t.Position = translation;
-							t.Rotation = rotation;
+							t.Translation = translation;
+							t.SetRotation(rotation);
 							t.Scale = scale; });
 					}
 				}

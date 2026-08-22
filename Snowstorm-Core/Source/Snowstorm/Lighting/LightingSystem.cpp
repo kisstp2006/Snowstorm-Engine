@@ -52,8 +52,14 @@ namespace Snowstorm
 			lightData.Lights[lightData.LightCount++] = {
 			    .Direction = glm::normalize(directionalLight.Direction),
 			    .Intensity = directionalLight.Intensity,
-			    .Color = directionalLight.Color,
-			    .Padding{}};
+			    .Radiance = directionalLight.Radiance,
+			    .ShadowAmount = directionalLight.ShadowAmount,
+			    // LightSize is the angular DIAMETER in degrees (sun = 0.53); the shader wants the tangent of
+			    // the half-angle, which is the cone radius of the shadow ray at unit distance.
+			    .SourceTanAngle = std::tan(glm::radians(std::max(directionalLight.LightSize, 0.0f) * 0.5f)),
+			    .SoftShadows = directionalLight.SoftShadows ? 1u : 0u,
+			    ._Pad0 = 0.0f,
+			    ._Pad1 = 0.0f};
 		}
 
 		if (droppedLights && !m_WarnedDroppedDirectional)
@@ -138,10 +144,15 @@ namespace Snowstorm
 			lightData.PointLights[lightData.PointCount++] = {
 			    .Position = lightPosition,
 			    .Range = light.Range,
-			    .Color = light.Color,
+			    .Radiance = light.Radiance,
 			    .Intensity = light.Intensity,
 			    .ShadowSlot = shadowSlot,
-			    .ShadowPad = {0, 0, 0}};
+			    .MinRadius = std::max(light.MinRadius, 0.001f),
+			    .Falloff = light.Falloff,
+			    .SourceRadius = std::max(light.LightSize, 0.0f),
+			    .ShadowAmount = light.ShadowAmount,
+			    .SoftShadows = light.SoftShadows ? 1u : 0u,
+			    ._Pad = {0.0f, 0.0f}};
 		}
 		lightData.PointShadowCount = nextPointShadowSlot;
 		if (droppedPoint && !m_WarnedDroppedPoint)
@@ -209,13 +220,18 @@ namespace Snowstorm
 			lightData.SpotLights[lightData.SpotCount++] = {
 			    .Position = lightPosition,
 			    .Range = light.Range,
-			    .Color = light.Color,
+			    .Radiance = light.Radiance,
 			    .Intensity = light.Intensity,
 			    .Direction = forward,
 			    .CosInner = std::cos(inner),
 			    .CosOuter = std::cos(outer),
 			    .ShadowIndex = shadowIndex,
-			    .ShadowPad = {0, 0},
+			    .AngleAttenuation = std::max(light.AngleAttenuation, 0.01f),
+			    .Falloff = light.Falloff,
+			    .SourceRadius = std::max(light.LightSize, 0.0f),
+			    .ShadowAmount = light.ShadowAmount,
+			    .SoftShadows = light.SoftShadows ? 1u : 0u,
+			    ._Pad = 0.0f,
 			    .ShadowViewProj = shadowViewProj,
 			    .ShadowAtlasRect = atlasRect};
 		}

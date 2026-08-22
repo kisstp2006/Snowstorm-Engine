@@ -40,7 +40,7 @@ namespace Snowstorm
 			float ShadowStrength = 1.0f;
 
 			glm::vec3 SkyZenithColor{0.0f};
-			float LightSourceRadius = 0.0f; // point/spot physical radius (finite size for NEE)
+			float _PadSky = 0.0f; // reserved (16-byte row); light source size is per light in the arrays below
 			glm::vec3 SkyHorizonColor{0.0f};
 			float MaxBounceWeight = 8.0f; // path regularization: max per-bounce BSDF weight (0 = off)
 			glm::vec3 GroundColor{0.0f};
@@ -57,9 +57,10 @@ namespace Snowstorm
 			uint32_t _pad2 = 0;
 
 			// Raw-packed point/spot lights (mirror the float4 arrays in PathTrace.comp.hlsl exactly). Point:
-			// [2i] = pos.xyz,range; [2i+1] = color.xyz,intensity. Spot: [4i] = pos.xyz,range; [4i+1] =
-			// color.xyz,intensity; [4i+2] = dir.xyz,cosInner; [4i+3].x = cosOuter.
-			glm::vec4 PointLights[32]{};
+			// [3i] = pos.xyz,range; [3i+1] = radiance.xyz,intensity; [3i+2] = sourceRadius,minRadius,falloff,0.
+			// Spot: [4i] = pos.xyz,range; [4i+1] = radiance.xyz,intensity; [4i+2] = dir.xyz,cosInner;
+			// [4i+3] = cosOuter,sourceRadius,falloff,angleAttenuation.
+			glm::vec4 PointLights[48]{};
 			glm::vec4 SpotLights[64]{};
 		};
 
@@ -142,7 +143,6 @@ namespace Snowstorm
 		cb.SunColor = pr.SunColor;
 		cb.ShadowStrength = pr.ShadowStrength;
 		cb.SkyZenithColor = pr.SkyZenithColor;
-		cb.LightSourceRadius = pr.LightSourceRadius;
 		cb.SkyHorizonColor = pr.SkyHorizonColor;
 		cb.MaxBounceWeight = pr.MaxBounceWeight;
 		cb.GroundColor = pr.GroundColor;
@@ -157,8 +157,9 @@ namespace Snowstorm
 		for (uint32_t i = 0; i < pc; ++i)
 		{
 			const GPUPointLight& pl = lights.PointLights[i];
-			cb.PointLights[i * 2u] = glm::vec4(pl.Position, pl.Range);
-			cb.PointLights[i * 2u + 1u] = glm::vec4(pl.Color, pl.Intensity);
+			cb.PointLights[i * 3u] = glm::vec4(pl.Position, pl.Range);
+			cb.PointLights[i * 3u + 1u] = glm::vec4(pl.Radiance, pl.Intensity);
+			cb.PointLights[i * 3u + 2u] = glm::vec4(pl.SourceRadius, pl.MinRadius, pl.Falloff, 0.0f);
 		}
 		const uint32_t sc = static_cast<uint32_t>(std::min(lights.SpotCount, MAX_SPOT_LIGHTS));
 		cb.SpotCount = sc;
@@ -166,9 +167,9 @@ namespace Snowstorm
 		{
 			const GPUSpotLight& sl = lights.SpotLights[i];
 			cb.SpotLights[i * 4u] = glm::vec4(sl.Position, sl.Range);
-			cb.SpotLights[i * 4u + 1u] = glm::vec4(sl.Color, sl.Intensity);
+			cb.SpotLights[i * 4u + 1u] = glm::vec4(sl.Radiance, sl.Intensity);
 			cb.SpotLights[i * 4u + 2u] = glm::vec4(sl.Direction, sl.CosInner);
-			cb.SpotLights[i * 4u + 3u] = glm::vec4(sl.CosOuter, 0.0f, 0.0f, 0.0f);
+			cb.SpotLights[i * 4u + 3u] = glm::vec4(sl.CosOuter, sl.SourceRadius, sl.Falloff, sl.AngleAttenuation);
 		}
 
 		m_ParamBuffers[frameIndex]->SetData(&cb, sizeof(PTCB), 0);

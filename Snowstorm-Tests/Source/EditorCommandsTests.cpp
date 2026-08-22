@@ -50,7 +50,7 @@ TEST_CASE("SceneSerializer round-trips a single entity preserving UUID + compone
 {
 	World world;
 	Entity e = world.CreateEntity("Original");
-	e.AddComponent<TransformComponent>().Position = glm::vec3(1.0f, 2.0f, 3.0f);
+	e.AddComponent<TransformComponent>().Translation = glm::vec3(1.0f, 2.0f, 3.0f);
 	const UUID id = e.GetComponent<IDComponent>().Id;
 
 	nlohmann::json snap;
@@ -66,19 +66,19 @@ TEST_CASE("SceneSerializer round-trips a single entity preserving UUID + compone
 	REQUIRE(restored.GetComponent<IDComponent>().Id == id); // same identity
 	REQUIRE(restored.GetComponent<TagComponent>().Tag == "Original");
 	REQUIRE(restored.HasComponent<TransformComponent>());
-	REQUIRE(restored.GetComponent<TransformComponent>().Position.y == 2.0f);
+	REQUIRE(restored.GetComponent<TransformComponent>().Translation.y == 2.0f);
 }
 
 TEST_CASE("TransformCommand undo/redo restores before/after", "[editor][undo]")
 {
 	World world;
 	Entity e = world.CreateEntity("Movable");
-	e.AddComponent<TransformComponent>().Position = glm::vec3(0.0f);
+	e.AddComponent<TransformComponent>().Translation = glm::vec3(0.0f);
 	const UUID id = e.GetComponent<IDComponent>().Id;
 
 	TransformComponent before = e.GetComponent<TransformComponent>();
 	TransformComponent after = before;
-	after.Position = glm::vec3(5.0f, 0.0f, 0.0f);
+	after.Translation = glm::vec3(5.0f, 0.0f, 0.0f);
 	e.PatchComponent<TransformComponent>([&](TransformComponent& t)
 	                                     { t = after; });
 
@@ -87,11 +87,11 @@ TEST_CASE("TransformCommand undo/redo restores before/after", "[editor][undo]")
 
 	REQUIRE(history.CanUndo());
 	history.Undo(world);
-	REQUIRE(world.FindEntityByUUID(id).GetComponent<TransformComponent>().Position.x == 0.0f);
+	REQUIRE(world.FindEntityByUUID(id).GetComponent<TransformComponent>().Translation.x == 0.0f);
 
 	REQUIRE(history.CanRedo());
 	history.Redo(world);
-	REQUIRE(world.FindEntityByUUID(id).GetComponent<TransformComponent>().Position.x == 5.0f);
+	REQUIRE(world.FindEntityByUUID(id).GetComponent<TransformComponent>().Translation.x == 5.0f);
 }
 
 TEST_CASE("RenameCommand undo/redo restores before/after tag", "[editor][undo]")
@@ -115,7 +115,7 @@ TEST_CASE("AddEntityCommand undo removes, redo restores (create / duplicate path
 {
 	World world;
 	Entity e = world.CreateEntity("Created");
-	e.AddComponent<TransformComponent>().Position = glm::vec3(7.0f);
+	e.AddComponent<TransformComponent>().Translation = glm::vec3(7.0f);
 	const UUID id = e.GetComponent<IDComponent>().Id;
 
 	EditorHistorySingleton history;
@@ -130,14 +130,14 @@ TEST_CASE("AddEntityCommand undo removes, redo restores (create / duplicate path
 	history.Redo(world);
 	const Entity restored = world.FindEntityByUUID(id);
 	REQUIRE(restored.IsValid());
-	REQUIRE(restored.GetComponent<TransformComponent>().Position.x == 7.0f);
+	REQUIRE(restored.GetComponent<TransformComponent>().Translation.x == 7.0f);
 }
 
 TEST_CASE("DeleteEntityCommand undo restores snapshot, redo deletes again", "[editor][undo]")
 {
 	World world;
 	Entity e = world.CreateEntity("Doomed");
-	e.AddComponent<TransformComponent>().Position = glm::vec3(9.0f);
+	e.AddComponent<TransformComponent>().Translation = glm::vec3(9.0f);
 	const UUID id = e.GetComponent<IDComponent>().Id;
 
 	// Mirror the hierarchy panel: snapshot the subtree, then destroy, then push the command.
@@ -154,7 +154,7 @@ TEST_CASE("DeleteEntityCommand undo restores snapshot, redo deletes again", "[ed
 	history.Undo(world);
 	const Entity restored = world.FindEntityByUUID(id);
 	REQUIRE(restored.IsValid());
-	REQUIRE(restored.GetComponent<TransformComponent>().Position.x == 9.0f);
+	REQUIRE(restored.GetComponent<TransformComponent>().Translation.x == 9.0f);
 
 	// Redo deletes it again.
 	history.Redo(world);
@@ -166,7 +166,7 @@ TEST_CASE("ComponentEditCommand undo/redo restores serialized before/after", "[e
 {
 	World world;
 	Entity e = world.CreateEntity("Edited");
-	e.AddComponent<TransformComponent>().Position = glm::vec3(1.0f, 1.0f, 1.0f);
+	e.AddComponent<TransformComponent>().Translation = glm::vec3(1.0f, 1.0f, 1.0f);
 	const UUID id = e.GetComponent<IDComponent>().Id;
 
 	const std::string typeName = "Snowstorm::TransformComponent";
@@ -178,7 +178,7 @@ TEST_CASE("ComponentEditCommand undo/redo restores serialized before/after", "[e
 	const nlohmann::json beforeComp = before["Components"][typeName];
 
 	e.PatchComponent<TransformComponent>([](TransformComponent& t)
-	                                     { t.Position = glm::vec3(5.0f, 6.0f, 7.0f); });
+	                                     { t.Translation = glm::vec3(5.0f, 6.0f, 7.0f); });
 
 	nlohmann::json after;
 	REQUIRE(SceneSerializer::SerializeEntity(e, after));
@@ -188,11 +188,11 @@ TEST_CASE("ComponentEditCommand undo/redo restores serialized before/after", "[e
 	history.Push(CreateRef<ComponentEditCommand>(id, typeName, beforeComp, afterComp));
 
 	history.Undo(world);
-	REQUIRE(world.FindEntityByUUID(id).GetComponent<TransformComponent>().Position.x == 1.0f);
+	REQUIRE(world.FindEntityByUUID(id).GetComponent<TransformComponent>().Translation.x == 1.0f);
 
 	history.Redo(world);
-	REQUIRE(world.FindEntityByUUID(id).GetComponent<TransformComponent>().Position.x == 5.0f);
-	REQUIRE(world.FindEntityByUUID(id).GetComponent<TransformComponent>().Position.z == 7.0f);
+	REQUIRE(world.FindEntityByUUID(id).GetComponent<TransformComponent>().Translation.x == 5.0f);
+	REQUIRE(world.FindEntityByUUID(id).GetComponent<TransformComponent>().Translation.z == 7.0f);
 }
 
 TEST_CASE("History: a new action clears the redo stack", "[editor][undo]")
@@ -206,7 +206,7 @@ TEST_CASE("History: a new action clears the redo stack", "[editor][undo]")
 
 	TransformComponent before = e.GetComponent<TransformComponent>();
 	TransformComponent after = before;
-	after.Position = glm::vec3(1.0f);
+	after.Translation = glm::vec3(1.0f);
 	e.PatchComponent<TransformComponent>([&](TransformComponent& t)
 	                                     { t = after; });
 	history.Push(CreateRef<TransformCommand>(id, before, after));

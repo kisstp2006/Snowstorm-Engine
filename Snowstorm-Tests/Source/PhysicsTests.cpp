@@ -43,7 +43,7 @@ namespace
 		{
 			Entity e = W.CreateEntity(name);
 			auto& tr = e.AddComponent<TransformComponent>();
-			tr.Position = pos;
+			tr.Translation = pos;
 			tr.Scale = scale;
 			e.AddComponent<BoxColliderComponent>().HalfSize = glm::vec3(0.5f); // explicit: the numbers below assume a unit box
 			auto& rb = e.AddComponent<RigidBodyComponent>();
@@ -75,7 +75,7 @@ TEST_CASE("A dynamic box falls onto a static floor and comes to rest, determinis
 		REQUIRE(cube.HasComponent<PhysicsBodyRuntimeComponent>());
 		REQUIRE(pw.W.GetSingleton<JoltScene>().GetBodyCount() == 2);
 		pw.Step(240); // 4 s
-		return cube.GetComponent<TransformComponent>().Position;
+		return cube.GetComponent<TransformComponent>().Translation;
 	};
 
 	const glm::vec3 a = run();
@@ -97,7 +97,7 @@ TEST_CASE("A child collider folds into the parent body's compound shape and foll
 	pw.Box("Floor", {0, -2, 0}, {10, 0.25f, 10}, EBodyType::Static);
 	Entity body = pw.Box("Body", {0, 4, 0}, {1, 1, 1}, EBodyType::Dynamic);
 	Entity child = pw.W.CreateEntity("Child");
-	child.AddComponent<TransformComponent>().Position = {2, 0, 0};
+	child.AddComponent<TransformComponent>().Translation = {2, 0, 0};
 	child.AddComponent<BoxColliderComponent>().HalfSize = glm::vec3(0.5f);
 	pw.W.SetParent(child, body, false);
 
@@ -123,7 +123,7 @@ TEST_CASE("The collision matrix gates contacts and the script event queue receiv
 	PhysicsLayerManager::SetLayerCollision(0, 1, false); // layer 1 passes through layer 0
 
 	pw.Step(240);
-	REQUIRE(ghost.GetComponent<TransformComponent>().Position.y < -3.0f); // fell through the floor
+	REQUIRE(ghost.GetComponent<TransformComponent>().Translation.y < -3.0f); // fell through the floor
 
 	PhysicsLayerManager::SetLayerCollision(0, 1, true);
 	Entity solid = pw.Box("Solid", {3, 2, 0}, {1, 1, 1}, EBodyType::Dynamic, 1);
@@ -139,7 +139,7 @@ TEST_CASE("The collision matrix gates contacts and the script event queue receiv
 		}
 	}
 	REQUIRE(solidHitFloor);
-	REQUIRE(solid.GetComponent<TransformComponent>().Position.y == Catch::Approx(-1.375f).margin(0.05f));
+	REQUIRE(solid.GetComponent<TransformComponent>().Translation.y == Catch::Approx(-1.375f).margin(0.05f));
 }
 
 TEST_CASE("Bodies authored in Edit mode all wake up when Play starts", "[physics]")
@@ -151,11 +151,11 @@ TEST_CASE("Bodies authored in Edit mode all wake up when Play starts", "[physics
 	Entity b = pw.Box("B", {3, 4, 0}, {1, 1, 1}, EBodyType::Dynamic);
 	pw.Step(30); // Edit mode: bodies exist (debug draw) but nothing moves
 	REQUIRE(a.HasComponent<PhysicsBodyRuntimeComponent>());
-	REQUIRE(a.GetComponent<TransformComponent>().Position.y == Catch::Approx(4.0f));
+	REQUIRE(a.GetComponent<TransformComponent>().Translation.y == Catch::Approx(4.0f));
 
 	pw.W.GetSingleton<SimulationStateSingleton>().Current = SimulationStateSingleton::Mode::Play;
 	pw.Step(240);
 	// Both fell — not just the one that happened to be touched last.
-	REQUIRE(a.GetComponent<TransformComponent>().Position.y < 0.0f);
-	REQUIRE(b.GetComponent<TransformComponent>().Position.y < 0.0f);
+	REQUIRE(a.GetComponent<TransformComponent>().Translation.y < 0.0f);
+	REQUIRE(b.GetComponent<TransformComponent>().Translation.y < 0.0f);
 }

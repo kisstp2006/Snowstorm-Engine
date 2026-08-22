@@ -128,7 +128,7 @@ namespace Snowstorm
 		{
 			cb.SunDirection = frame.Lights.Lights[0].Direction;
 			cb.SunIntensity = frame.Lights.Lights[0].Intensity;
-			cb.SunColor = frame.Lights.Lights[0].Color;
+			cb.SunColor = frame.Lights.Lights[0].Radiance;
 		}
 		cb.ShadowStrength = CVars::ShadowStrength.Get();
 

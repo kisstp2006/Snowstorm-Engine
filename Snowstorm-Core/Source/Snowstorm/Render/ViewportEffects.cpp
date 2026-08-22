@@ -106,9 +106,6 @@ namespace Snowstorm
 				PathTracePass::Params p{};
 				p.InvViewProj = glm::inverse(vp);
 				p.CameraPosition = v.Cam.Position;
-				// Sun as a finite disk: cos of its angular RADIUS (render.shadow.sun_angle_deg is the DIAMETER),
-				// so the reflected sun on smooth floors converges to a soft highlight instead of a hot delta dot.
-				p.SunCosThetaMax = glm::cos(glm::radians(0.5f * CVars::ShadowSunAngleDeg.Get()));
 				p.OutSize = {w, h};
 				p.BaseSampleCount = base;
 				p.SamplesPerFrame = spp;
@@ -119,10 +116,14 @@ namespace Snowstorm
 				{
 					p.SunDirection = fd.Lights.Lights[0].Direction;
 					p.SunIntensity = fd.Lights.Lights[0].Intensity;
-					p.SunColor = fd.Lights.Lights[0].Color;
+					p.SunColor = fd.Lights.Lights[0].Radiance;
+					// Sun as a finite disk: cos of its angular RADIUS, from the light's own LightSize, so the
+					// reflected sun on smooth floors converges to a soft highlight instead of a hot delta dot.
+					// cos(atan(t)) = 1 / sqrt(1 + t^2) with t = tan(angular radius).
+					const float t = fd.Lights.Lights[0].SourceTanAngle;
+					p.SunCosThetaMax = 1.0f / std::sqrt(1.0f + t * t);
 				}
 				p.ShadowStrength = CVars::ShadowStrength.Get();
-				p.LightSourceRadius = CVars::ShadowSourceRadius.Get(); // finite point/spot size (soft highlights, no delta dots)
 				p.FireflyClamp = CVars::PathTraceClamp.Get();
 				p.MaxBounceWeight = CVars::PathTraceWeightClamp.Get(); // path regularization (kills indirect throughput spikes)
 				p.EnvNee = envNee;                                     // environment (sky) NEE + MIS (render.pathtrace.envnee)
@@ -892,10 +893,9 @@ namespace Snowstorm
 				const float normalBias = CVars::ShadowNormalBias.Get(); // render.shadows.normalbias (acne vs peter-panning)
 				const auto frameCounter = static_cast<uint32_t>(fc.Renderer.GetFrameCounter());
 				// Soft shadows: jitter the chosen ray within each light's area (temporal+denoise converge the
-				// penumbra). Reuses the existing raster/inline soft CVars. Sun cone = tan(angular half-size).
+				// penumbra). This is only the master switch -- the per-light SoftShadows/LightSize ride along in
+				// LightDataBlock and decide each light's cone.
 				const bool soft = CVars::ShadowSoft.Get();
-				const float sunTanAngular = glm::tan(glm::radians(CVars::ShadowSunAngleDeg.Get()));
-				const float sourceRadius = CVars::ShadowSourceRadius.Get();
 				const auto rayCount = static_cast<uint32_t>(CVars::ClampedShadowRayCount());
 				// Geometry-table device address for the cutout any-hit alpha test (foliage/thin cutout occluders).
 				// 0 = table not published this frame -> the traversal treats hits as solid (AO's fallback). The table
@@ -909,10 +909,10 @@ namespace Snowstorm
 				                            {depthView->GetTexture(), RenderGraph::AccessState::Sampled}},
 				                  .Writes = {{shadowView->GetTexture(), RenderGraph::AccessState::Storage},
 				                             {shadowSpecView->GetTexture(), RenderGraph::AccessState::Storage}},
-				                  .Execute = [this, &fc, invViewProj, lights, normalBias, frameCounter, soft, sunTanAngular, sourceRadius, rayCount, tableAddr, camPos, gbufView, shadingView, depthView, shadowView, shadowSpecView, shW, shH](CommandContext& c)
+				                  .Execute = [this, &fc, invViewProj, lights, normalBias, frameCounter, soft, rayCount, tableAddr, camPos, gbufView, shadingView, depthView, shadowView, shadowSpecView, shW, shH](CommandContext& c)
 				                  {
 					                  m_Pass.Dispatch(fc.Ctx, fc.FrameIndex, invViewProj, lights, normalBias, frameCounter,
-					                                  soft, sunTanAngular, sourceRadius, rayCount, tableAddr, camPos, gbufView, shadingView, depthView, shadowView, shadowSpecView, shW, shH);
+					                                  soft, rayCount, tableAddr, camPos, gbufView, shadingView, depthView, shadowView, shadowSpecView, shW, shH);
 				                  }});
 
 				v.ShadowView = shadowView;         // the raw diffuse estimate; the temporal/denoise stages republish

@@ -84,7 +84,7 @@ namespace Snowstorm
 					{
 						continue; // bucket is rebuilt on the next frame; never touch a dead handle
 					}
-					glm::mat4 world = reg.get<TransformComponent>(e).GetTransformMatrix();
+					glm::mat4 world = reg.get<TransformComponent>(e).GetTransform();
 					if (const auto* h = reg.try_get_const<HierarchyComponent>(e); h && h->Parent != entt::null)
 					{
 						world = reg.get<WorldTransformComponent>(h->Parent).LocalToWorld * world;

@@ -947,7 +947,7 @@ namespace Snowstorm
 			auto lightEnt = m_ActiveWorld->CreateEntity("Directional Light A");
 			auto& light = lightEnt.AddComponent<DirectionalLightComponent>();
 			light.Direction = glm::normalize(glm::vec3(1.0f, -1.0f, 0.5f));
-			light.Color = glm::vec3(1.0f, 0.9f, 0.8f);
+			light.Radiance = glm::vec3(1.0f, 0.9f, 0.8f);
 			light.Intensity = 1.0f;
 
 			lightEnt.AddComponent<VisibilityComponent>().Mask = Visibility::Scene | Visibility::Game;
@@ -957,7 +957,7 @@ namespace Snowstorm
 			auto lightEnt = m_ActiveWorld->CreateEntity("Directional Light B");
 			auto& light = lightEnt.AddComponent<DirectionalLightComponent>();
 			light.Direction = glm::normalize(glm::vec3(-0.8f, -0.6f, -0.5f));
-			light.Color = glm::vec3(0.7f, 0.8f, 1.0f);
+			light.Radiance = glm::vec3(0.7f, 0.8f, 1.0f);
 			light.Intensity = 0.8f;
 
 			lightEnt.AddComponent<VisibilityComponent>().Mask = Visibility::Scene | Visibility::Game;
@@ -980,7 +980,7 @@ namespace Snowstorm
 				ov.Overrides.push_back(albedoOverride);
 			}
 
-			e.WriteComponent<TransformComponent>().Position += glm::vec3(2.0f, 2.0f, 6.0f);
+			e.WriteComponent<TransformComponent>().Translation += glm::vec3(2.0f, 2.0f, 6.0f);
 		}
 
 		// ---------------------------------------------------------------------
@@ -990,7 +990,7 @@ namespace Snowstorm
 			auto e = m_ActiveWorld->CreateEntity("Mandelbrot Girl");
 			SetupRenderable(e, girlMeshH, mandelbrotMatH, Visibility::Scene | Visibility::Game);
 
-			e.WriteComponent<TransformComponent>().Position += glm::vec3(3.0f);
+			e.WriteComponent<TransformComponent>().Translation += glm::vec3(3.0f);
 		}
 
 		// ---------------------------------------------------------------------
@@ -1009,7 +1009,7 @@ namespace Snowstorm
 				ov.Overrides.push_back(albedoOverride);
 			}
 
-			e.WriteComponent<TransformComponent>().Position += glm::vec3(-2.0f, -2.0f, 6.0f);
+			e.WriteComponent<TransformComponent>().Translation += glm::vec3(-2.0f, -2.0f, 6.0f);
 		}
 
 		// ---------------------------------------------------------------------
@@ -1077,7 +1077,7 @@ namespace Snowstorm
 				cv.Mask = Visibility::Scene; // Scene viewport sees scene
 			}
 
-			cameraEntity.WriteComponent<TransformComponent>().Position.z = 15.0f;
+			cameraEntity.WriteComponent<TransformComponent>().Translation.z = 15.0f;
 		}
 	}
 
@@ -1120,8 +1120,8 @@ namespace Snowstorm
 
 		nlohmann::json j;
 		j["Version"] = 1;
-		j["Camera"]["Position"] = {tr.Position.x, tr.Position.y, tr.Position.z};
-		j["Camera"]["Rotation"] = {tr.Rotation.x, tr.Rotation.y, tr.Rotation.z, tr.Rotation.w}; // quaternion xyzw
+		j["Camera"]["Position"] = {tr.Translation.x, tr.Translation.y, tr.Translation.z};
+		j["Camera"]["Rotation"] = {tr.GetRotationEuler().x, tr.GetRotationEuler().y, tr.GetRotationEuler().z}; // Euler radians
 
 		std::ofstream out(EditorSidecarPath(scenePath));
 		if (out.is_open())
@@ -1159,11 +1159,11 @@ namespace Snowstorm
 		auto& tr = reg.Write<TransformComponent>(cam.Handle());
 		if (c.contains("Position") && c["Position"].is_array() && c["Position"].size() == 3)
 		{
-			tr.Position = {c["Position"][0], c["Position"][1], c["Position"][2]};
+			tr.Translation = {c["Position"][0], c["Position"][1], c["Position"][2]};
 		}
-		if (c.contains("Rotation") && c["Rotation"].is_array() && c["Rotation"].size() == 4)
+		if (c.contains("Rotation") && c["Rotation"].is_array() && c["Rotation"].size() == 3)
 		{
-			tr.Rotation = glm::normalize(glm::quat(c["Rotation"][3], c["Rotation"][0], c["Rotation"][1], c["Rotation"][2]));
+			tr.SetRotationEuler({c["Rotation"][0], c["Rotation"][1], c["Rotation"][2]});
 		}
 
 		// The controller caches target yaw/pitch and re-seeds them from the transform only while
@@ -1186,7 +1186,7 @@ namespace Snowstorm
 			auto key = m_ActiveWorld->CreateEntity("Sun (key)");
 			auto& dl = key.AddComponent<DirectionalLightComponent>();
 			dl.Direction = glm::normalize(glm::vec3(-0.5f, -1.0f, -0.3f));
-			dl.Color = glm::vec3(1.0f, 0.97f, 0.9f);
+			dl.Radiance = glm::vec3(1.0f, 0.97f, 0.9f);
 			dl.Intensity = 1.0f;
 			key.AddComponent<VisibilityComponent>().Mask = Visibility::Scene | Visibility::Game;
 		}
@@ -1194,7 +1194,7 @@ namespace Snowstorm
 			auto fill = m_ActiveWorld->CreateEntity("Sky (fill)");
 			auto& dl = fill.AddComponent<DirectionalLightComponent>();
 			dl.Direction = glm::normalize(glm::vec3(0.4f, -0.3f, 0.6f));
-			dl.Color = glm::vec3(0.6f, 0.7f, 0.9f);
+			dl.Radiance = glm::vec3(0.6f, 0.7f, 0.9f);
 			dl.Intensity = 0.4f;
 			fill.AddComponent<VisibilityComponent>().Mask = Visibility::Scene | Visibility::Game;
 		}

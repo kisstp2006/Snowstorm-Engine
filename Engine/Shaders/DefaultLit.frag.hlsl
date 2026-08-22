@@ -30,7 +30,8 @@ float4 SampleBindless(uint index, float2 uv)
 // map (the sun), or a tile rect for a spot in the shared atlas. PCF taps are CLAMPED to the rect so a
 // tap near a tile edge can't bleed into a neighbour tile. Manual PCF keeps the bindless SAMPLED_IMAGE
 // model (no comparison-sampler descriptor). NdotL drives a slope-scaled bias; ShadowStrength lightens.
-float SampleShadowFactor(uint texIndex, float4x4 lightViewProj, float4 atlasRect, float3 positionWS, float3 Ng, float NdotL)
+// `soft` is the light's own SoftShadows flag ANDed with the global ShadowSoft switch: 3x3 PCF vs one tap.
+float SampleShadowFactor(uint texIndex, float4x4 lightViewProj, float4 atlasRect, float3 positionWS, float3 Ng, float NdotL, bool soft)
 {
 	// Normal-offset bias (#59): shift the sample point along the geometric normal before projecting into
 	// light space, in WORLD units, scaled by the grazing angle (most acne is on surfaces near-parallel to
@@ -73,7 +74,7 @@ float SampleShadowFactor(uint texIndex, float4x4 lightViewProj, float4 atlasRect
 	// path takes a 3x3 grid of these (so 9 HW taps => an effectively wider, smoother 4x4-ish kernel); the
 	// hard path is a single tap (still HW-bilinear, so smoother than the old nearest single-sample).
 	float visibility;
-	if (ShadowSoft != 0)
+	if (soft)
 	{
 		float sum = 0.0;
 		[unroll] for (int dy = -1; dy <= 1; ++dy)
@@ -214,26 +215,29 @@ float RayTraceSoftShadow(float3 positionWS, float3 Ng, float3 L, float tMax, flo
 #endif
 
 // Directional-sun shadow: RT ray query (when RTShadowEnabled) or the raster shadow map (dedicated map,
-// gated by ShadowMapIndex; 0 = no shadows). `Ng`/`L`/`pixelPos` are only used by the RT path.
-float SampleSunShadow(float3 positionWS, float3 Ng, float3 L, float NdotL, float2 pixelPos)
+// gated by ShadowMapIndex; 0 = no shadows). `Ng`/`L`/`pixelPos` are only used by the RT path. The light's
+// own SoftShadows / SourceTanAngle / ShadowAmount drive the penumbra width and how dark the shadow goes;
+// the global ShadowSoft / ShadowStrength stay as the master switch and multiplier on top.
+float SampleSunShadow(DirectionalLight light, float3 positionWS, float3 Ng, float3 L, float NdotL, float2 pixelPos)
 {
+	const bool soft = ShadowSoft != 0 && light.SoftShadows != 0;
+	float factor;
 #ifdef SS_RAYTRACING
 	if (RTShadowEnabled != 0)
 	{
-		// Soft (cone-sampled penumbra) when enabled — the sun's angular half-size subtends a disk of
-		// radius tan(SunAngularRadius) perpendicular to L. Else the hard single ray. Sun is at infinity.
-		if (ShadowSoft != 0)
-		{
-			return RayTraceSoftShadow(positionWS, Ng, L, 1e30, tan(SunAngularRadius), pixelPos);
-		}
-		return RayTraceShadow(positionWS, Ng, L, 1e30);
+		// Soft (cone-sampled penumbra) when enabled — the light's angular half-size subtends a disk of
+		// radius SourceTanAngle perpendicular to L. Else the hard single ray. The sun is at infinity.
+		factor = soft ? RayTraceSoftShadow(positionWS, Ng, L, 1e30, light.SourceTanAngle, pixelPos)
+		              : RayTraceShadow(positionWS, Ng, L, 1e30);
+		return lerp(1.0, factor, saturate(light.ShadowAmount));
 	}
 #endif
 	if (ShadowMapIndex == 0)
 	{
 		return 1.0;
 	}
-	return SampleShadowFactor(ShadowMapIndex, LightViewProj, float4(0, 0, 1, 1), positionWS, Ng, NdotL);
+	factor = SampleShadowFactor(ShadowMapIndex, LightViewProj, float4(0, 0, 1, 1), positionWS, Ng, NdotL, soft);
+	return lerp(1.0, factor, saturate(light.ShadowAmount));
 }
 
 // Spot shadow: RT ray query (when RTShadowEnabled and this spot casts) or the shared raster atlas at the
@@ -242,6 +246,8 @@ float SampleSunShadow(float3 positionWS, float3 Ng, float3 L, float NdotL, float
 // (ShadowIndex >= 0); RT path gated by ShadowIndex >= 0 alone (the "this light casts" sentinel).
 float SampleSpotShadow(SpotLight spot, float3 positionWS, float3 Ng, float3 L, float distToLight, float NdotL, float2 pixelPos)
 {
+	const bool soft = ShadowSoft != 0 && spot.SoftShadows != 0;
+	float factor;
 #ifdef SS_RAYTRACING
 	if (RTShadowEnabled != 0)
 	{
@@ -251,20 +257,19 @@ float SampleSpotShadow(SpotLight spot, float3 positionWS, float3 Ng, float3 L, f
 		}
 		// Stop just short of the light so the ray can't hit geometry at/behind the light position.
 		const float tMax = max(distToLight - 0.05, 0.0);
-		// Soft: a source of radius LightSourceRadius at distToLight subtends a cone of half-angle whose
+		// Soft: a source of radius SourceRadius at distToLight subtends a cone of half-angle whose
 		// tangent is (radius / distance) — bigger/closer source => wider penumbra.
-		if (ShadowSoft != 0)
-		{
-			return RayTraceSoftShadow(positionWS, Ng, L, tMax, LightSourceRadius / max(distToLight, 1e-4), pixelPos);
-		}
-		return RayTraceShadow(positionWS, Ng, L, tMax);
+		factor = soft ? RayTraceSoftShadow(positionWS, Ng, L, tMax, spot.SourceRadius / max(distToLight, 1e-4), pixelPos)
+		              : RayTraceShadow(positionWS, Ng, L, tMax);
+		return lerp(1.0, factor, saturate(spot.ShadowAmount));
 	}
 #endif
 	if (SpotShadowAtlasIndex == 0 || spot.ShadowIndex < 0)
 	{
 		return 1.0;
 	}
-	return SampleShadowFactor(SpotShadowAtlasIndex, spot.ShadowViewProj, spot.ShadowAtlasRect, positionWS, Ng, NdotL);
+	factor = SampleShadowFactor(SpotShadowAtlasIndex, spot.ShadowViewProj, spot.ShadowAtlasRect, positionWS, Ng, NdotL, soft);
+	return lerp(1.0, factor, saturate(spot.ShadowAmount));
 }
 
 // Pick which of a point light's 6 cube faces a world-space direction belongs to. Faces are indexed
@@ -291,6 +296,8 @@ int PointShadowFace(float3 dir)
 // being bound AND a shadow slot assigned (ShadowSlot >= 0); RT path gated by ShadowSlot >= 0 alone.
 float SamplePointShadow(PointLight light, float3 positionWS, float3 Ng, float3 L, float distToLight, float NdotL, float2 pixelPos)
 {
+	const bool soft = ShadowSoft != 0 && light.SoftShadows != 0;
+	float factor;
 #ifdef SS_RAYTRACING
 	if (RTShadowEnabled != 0)
 	{
@@ -299,11 +306,9 @@ float SamplePointShadow(PointLight light, float3 positionWS, float3 Ng, float3 L
 			return 1.0; // this light doesn't cast
 		}
 		const float tMax = max(distToLight - 0.05, 0.0);
-		if (ShadowSoft != 0)
-		{
-			return RayTraceSoftShadow(positionWS, Ng, L, tMax, LightSourceRadius / max(distToLight, 1e-4), pixelPos);
-		}
-		return RayTraceShadow(positionWS, Ng, L, tMax);
+		factor = soft ? RayTraceSoftShadow(positionWS, Ng, L, tMax, light.SourceRadius / max(distToLight, 1e-4), pixelPos)
+		              : RayTraceShadow(positionWS, Ng, L, tMax);
+		return lerp(1.0, factor, saturate(light.ShadowAmount));
 	}
 #endif
 	if (PointShadowAtlasIndex == 0 || light.ShadowSlot < 0)
@@ -312,7 +317,8 @@ float SamplePointShadow(PointLight light, float3 positionWS, float3 Ng, float3 L
 	}
 	const int face = PointShadowFace(positionWS - light.Position);
 	const PointShadow payload = PointShadows[light.ShadowSlot];
-	return SampleShadowFactor(PointShadowAtlasIndex, payload.Face[face], payload.Rect[face], positionWS, Ng, NdotL);
+	factor = SampleShadowFactor(PointShadowAtlasIndex, payload.Face[face], payload.Rect[face], positionWS, Ng, NdotL, soft);
+	return lerp(1.0, factor, saturate(light.ShadowAmount));
 }
 
 // Tonemap + sRGB encode moved to the post-process pass (Tonemap.frag.hlsl, #53). This shader outputs
@@ -615,7 +621,7 @@ float4 main(PSInput i) : SV_Target0
 	[loop] for (int l = 0; l < count; ++l)
 	{
 		const float3 L = normalize(-DirectionalLights[l].Direction);
-		const float3 radiance = DirectionalLights[l].Color * DirectionalLights[l].Intensity;
+		const float3 radiance = DirectionalLights[l].Radiance * DirectionalLights[l].Intensity;
 		const float ndl = max(dot(N, L), 0.0);
 		// Stochastic (useShadowTex): the diffuse comes from the denoised irradiance D; here we only need the
 		// unshadowed irradiance (for the albedo scale) + the sharp specular. Inline: light 0 traces its own shadow.
@@ -628,7 +634,7 @@ float4 main(PSInput i) : SV_Target0
 		}
 		else
 		{
-			const float shadow = (l == 0) ? SampleSunShadow(i.PositionWS, N, L, ndl, i.PositionCS.xy) : 1.0;
+			const float shadow = (l == 0) ? SampleSunShadow(DirectionalLights[l], i.PositionWS, N, L, ndl, i.PositionCS.xy) : 1.0;
 			Lo += ShadePBR(N, V, L, F0, albedo, metallic, roughness, radiance) * shadow;
 		}
 	}
@@ -646,10 +652,15 @@ float4 main(PSInput i) : SV_Target0
 		}
 
 		const float3 L = toLight / max(dist, 1e-4);
-		const float window = pow(saturate(1.0 - pow(dist / range, 4.0)), 2.0);
-		const float atten = window / max(dist * dist, 1e-4);
+		// Windowed inverse-square (UE4/Frostbite), shaped by Falloff (1 = the window as-is, towards 0 it
+		// squares up so the light dies off closer to the source), with the 1/d^2 clamped inside MinRadius
+		// so a light sitting on a surface doesn't blow out to infinity.
+		float window = pow(saturate(1.0 - pow(dist / range, 4.0)), 2.0);
+		window = lerp(window * window, window, saturate(PointLights[p].Falloff));
+		const float minR = max(PointLights[p].MinRadius, 1e-3);
+		const float atten = window / max(dist * dist, minR * minR);
 		const float ndl = max(dot(N, L), 0.0);
-		const float3 radiance = PointLights[p].Color * PointLights[p].Intensity * atten;
+		const float3 radiance = PointLights[p].Radiance * PointLights[p].Intensity * atten;
 
 		if (useShadowTex)
 		{
@@ -684,12 +695,15 @@ float4 main(PSInput i) : SV_Target0
 			continue;
 		}
 
-		const float window = pow(saturate(1.0 - pow(dist / range, 4.0)), 2.0);
+		float window = pow(saturate(1.0 - pow(dist / range, 4.0)), 2.0);
+		window = lerp(window * window, window, saturate(SpotLights[s].Falloff));
 		const float atten = window / max(dist * dist, 1e-4);
 		const float denom = max(SpotLights[s].CosInner - SpotLights[s].CosOuter, 1e-4);
-		const float cone = pow(saturate((cosAngle - SpotLights[s].CosOuter) / denom), 2.0);
+		// AngleAttenuation is the exponent on the inner->outer blend: 1 = linear edge, higher tightens the
+		// falloff towards the outer cone.
+		const float cone = pow(saturate((cosAngle - SpotLights[s].CosOuter) / denom), max(SpotLights[s].AngleAttenuation, 0.01));
 		const float ndl = max(dot(N, L), 0.0);
-		const float3 radiance = SpotLights[s].Color * SpotLights[s].Intensity * atten * cone;
+		const float3 radiance = SpotLights[s].Radiance * SpotLights[s].Intensity * atten * cone;
 
 		if (useShadowTex)
 		{

@@ -17,8 +17,13 @@ namespace Snowstorm
 	{
 		glm::vec3 Direction;
 		float Intensity;
-		glm::vec3 Color;
-		float Padding = 0.0f;
+		glm::vec3 Radiance;
+		float ShadowAmount = 1.0f;
+		// tan(angular RADIUS) of the source disk: the shadow-ray cone half-width at unit distance.
+		float SourceTanAngle = 0.0f;
+		uint32_t SoftShadows = 1;
+		float _Pad0 = 0.0f;
+		float _Pad1 = 0.0f;
 	};
 
 	// Positional light GPU layouts. Each is whole 16-byte rows (std140/cbuffer packing). Position and,
@@ -28,12 +33,18 @@ namespace Snowstorm
 	{
 		glm::vec3 Position;
 		float Range;
-		glm::vec3 Color;
+		glm::vec3 Radiance;
 		float Intensity;
 		// Shadow slot: index into the PointShadows array below (0..MAX_SHADOW_POINTS-1), or < 0 when this
-		// light casts no shadow (shader skips the sample). Its own 16-byte row so the struct stays aligned.
+		// light casts no shadow (shader skips the sample).
 		int ShadowSlot = -1;
-		glm::vec3 ShadowPad = {0, 0, 0};
+		float MinRadius = 0.1f; // the inverse-square stops growing inside this radius
+		float Falloff = 1.0f;   // range-window shaping: 1 = default window, 0 = window squared
+		float SourceRadius = 0.1f;
+
+		float ShadowAmount = 1.0f;
+		uint32_t SoftShadows = 1;
+		glm::vec2 _Pad = {0.0f, 0.0f};
 	};
 
 	// The 6-face shadow payload for ONE shadow-casting point light (cube unrolled into an atlas). Face[f]
@@ -51,7 +62,7 @@ namespace Snowstorm
 	{
 		glm::vec3 Position;
 		float Range;
-		glm::vec3 Color;
+		glm::vec3 Radiance;
 		float Intensity;
 		glm::vec3 Direction;
 		float CosInner;
@@ -60,7 +71,13 @@ namespace Snowstorm
 		// ShadowViewProj reprojects world -> this spot's light clip, and ShadowAtlasRect (xy = UV offset,
 		// zw = UV scale) maps that into the spot's tile of the shared atlas. Kept in 16-byte rows.
 		int ShadowIndex = -1;
-		glm::vec2 ShadowPad = {0, 0};
+		float AngleAttenuation = 2.0f; // exponent on the inner->outer cone blend
+		float Falloff = 1.0f;          // range-window shaping (see GPUPointLight::Falloff)
+
+		float SourceRadius = 0.1f;
+		float ShadowAmount = 1.0f;
+		uint32_t SoftShadows = 1;
+		float _Pad = 0.0f;
 		glm::mat4 ShadowViewProj = glm::mat4(1.0f);
 		glm::vec4 ShadowAtlasRect = {0, 0, 1, 1};
 	};

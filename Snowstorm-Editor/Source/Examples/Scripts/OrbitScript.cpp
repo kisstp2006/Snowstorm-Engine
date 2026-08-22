@@ -13,7 +13,7 @@ namespace Snowstorm
 		{
 			return;
 		}
-		const glm::vec3 p = GetComponent<TransformComponent>().Position;
+		const glm::vec3 p = GetComponent<TransformComponent>().Translation;
 		m_Radius = std::max(0.5f, glm::length(glm::vec2(p.x, p.z)));
 		m_Height = p.y;
 		m_Angle = std::atan2(p.z, p.x);
@@ -27,7 +27,7 @@ namespace Snowstorm
 		}
 		m_Angle += ts.GetSeconds() * glm::half_pi<float>(); // a quarter turn per second
 		auto& tr = WriteComponent<TransformComponent>();
-		tr.Position = {m_Radius * std::cos(m_Angle), m_Height, m_Radius * std::sin(m_Angle)};
+		tr.Translation = {m_Radius * std::cos(m_Angle), m_Height, m_Radius * std::sin(m_Angle)};
 	}
 
 	void OrbitScript::OnFixedUpdate(const float /*fixedDt*/)

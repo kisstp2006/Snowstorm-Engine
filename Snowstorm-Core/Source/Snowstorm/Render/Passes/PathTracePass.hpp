@@ -43,7 +43,6 @@ namespace Snowstorm
 			glm::vec3 SkyZenithColor{0.0f};
 			glm::vec3 SkyHorizonColor{0.0f};
 			glm::vec3 GroundColor{0.0f};
-			float LightSourceRadius = 0.0f; // point/spot physical radius (finite size for NEE; 0 = delta)
 			float FireflyClamp = 16.0f;     // per-sample radiance clamp (0 = unbounded)
 			float MaxBounceWeight = 8.0f;   // path regularization: max per-bounce BSDF weight (0 = off)
 			uint32_t EnvNee = 1;            // 1 = environment (sky) NEE + MIS (render.pathtrace.envnee)

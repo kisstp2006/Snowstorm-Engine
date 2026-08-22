@@ -40,8 +40,8 @@ namespace
 	{
 		Entity e = world.CreateEntity(name);
 		auto& tr = e.AddComponent<TransformComponent>();
-		tr.Position = pos;
-		tr.Rotation = rot;
+		tr.Translation = pos;
+		tr.SetRotation(rot);
 		tr.Scale = scale;
 		return e;
 	}
@@ -76,7 +76,7 @@ TEST_CASE("SetParent keeps the world transform and updates depth", "[hierarchy]"
 	REQUIRE(MatNear(world.ComputeWorldMatrix(child), childWorldBefore));
 
 	// Local values were rewritten relative to the parent.
-	REQUIRE(child.GetComponent<TransformComponent>().Position != glm::vec3(1, 2, 3));
+	REQUIRE(child.GetComponent<TransformComponent>().Translation != glm::vec3(1, 2, 3));
 
 	// Unparent (keep world): back at root with the same world pose.
 	REQUIRE(world.SetParent(child, Entity{}, true));
@@ -147,7 +147,7 @@ TEST_CASE("TransformSystem propagates parent motion into children's world matric
 
 	// Move the parent only: the child's world matrix follows and is marked changed; the parent's too.
 	reg.ClearTrackedComponents();
-	reg.Write<TransformComponent>(parent.Handle()).Position = {5, 0, 0};
+	reg.Write<TransformComponent>(parent.Handle()).Translation = {5, 0, 0};
 	system.Execute(Timestep{0.016f});
 	REQUIRE(glm::vec3(reg.Read<WorldTransformComponent>(child.Handle()).LocalToWorld[3]) == glm::vec3(6, 0, 0));
 	REQUIRE(reg.WasChanged<WorldTransformComponent>(child.Handle()));
@@ -193,17 +193,17 @@ TEST_CASE("SceneSerializer round-trips the hierarchy (child listed before its pa
 	REQUIRE(MatNear(dst.ComputeWorldMatrix(gc), worldGC));
 }
 
-TEST_CASE("Quaternion rotation survives a JSON round-trip", "[serialize]")
+TEST_CASE("Rotation survives a JSON round-trip (authored Euler radians)", "[serialize]")
 {
 	World src;
 	Entity e = MakeTransformEntity(src, "Q", {0, 0, 0}, QuatFromEulerDegrees({10, 20, 30}));
 	nlohmann::json snap;
 	REQUIRE(SceneSerializer::SerializeEntity(e, snap));
-	REQUIRE(snap["Components"]["Snowstorm::TransformComponent"]["Rotation"].size() == 4);
+	REQUIRE(snap["Components"]["Snowstorm::TransformComponent"]["Rotation"].size() == 3); // Euler radians
 
 	World dst;
 	const Entity r = SceneSerializer::DeserializeEntity(dst, snap);
-	const glm::quat q = r.GetComponent<TransformComponent>().Rotation;
+	const glm::quat q = r.GetComponent<TransformComponent>().GetRotation();
 	const glm::vec3 deg = EulerDegreesFromQuat(q);
 	REQUIRE(deg.x == Catch::Approx(10.0f).margin(1e-3f));
 	REQUIRE(deg.y == Catch::Approx(20.0f).margin(1e-3f));
@@ -313,4 +313,33 @@ TEST_CASE("TransformSystem survives a scene wipe that recreates the same number 
 	world.SetParent(d, c, false);
 	system.Execute(Timestep{0.016f}); // must not touch the old handles
 	REQUIRE(glm::vec3(world.GetRegistry().Read<WorldTransformComponent>(d.Handle()).LocalToWorld[3]) == glm::vec3(7, 0, 0));
+}
+
+TEST_CASE("TransformComponent keeps quaternion and Euler in sync without 180-degree flips", "[transform]")
+{
+	TransformComponent tr;
+
+	// Authoring in Euler round-trips exactly (the Euler IS the stored value, not a re-derivation).
+	const glm::vec3 euler = glm::radians(glm::vec3{31.0f, -74.0f, 12.0f});
+	tr.SetRotationEuler(euler);
+	REQUIRE(tr.GetRotationEuler().x == Catch::Approx(euler.x).margin(1e-6f));
+	REQUIRE(tr.GetRotationEuler().y == Catch::Approx(euler.y).margin(1e-6f));
+	REQUIRE(tr.GetRotationEuler().z == Catch::Approx(euler.z).margin(1e-6f));
+	REQUIRE(MatNear(glm::mat4_cast(tr.GetRotation()), glm::mat4_cast(QuatFromEulerRadians(euler))));
+
+	// Setting the equivalent quaternion keeps the Euler angles near where they were, instead of jumping
+	// to the other valid representation (the flip that made the inspector unusable while dragging).
+	const glm::vec3 before = tr.GetRotationEuler();
+	tr.SetRotation(tr.GetRotation());
+	REQUIRE(glm::length(tr.GetRotationEuler() - before) < 1e-4f);
+
+	// A small quaternion nudge produces a small Euler change, not a 180-degree jump.
+	tr.SetRotation(glm::normalize(tr.GetRotation() * glm::angleAxis(glm::radians(2.0f), glm::vec3(1, 0, 0))));
+	REQUIRE(glm::length(tr.GetRotationEuler() - before) < glm::radians(10.0f));
+
+	// SetTransform decomposes a matrix into all three parts.
+	tr.SetTransform(glm::translate(glm::mat4(1.0f), glm::vec3(3, 4, 5)) * glm::mat4_cast(QuatFromEulerDegrees({0, 90, 0})) * glm::scale(glm::mat4(1.0f), glm::vec3(2)));
+	REQUIRE(tr.Translation == glm::vec3(3, 4, 5));
+	REQUIRE(tr.Scale.x == Catch::Approx(2.0f).margin(1e-4f));
+	REQUIRE(glm::degrees(tr.GetRotationEuler()).y == Catch::Approx(90.0f).margin(1e-3f));
 }

@@ -117,8 +117,8 @@ namespace Snowstorm
 			const FramingPose pose = ComputeFramingPose(bounds, cam.PerspectiveFOV);
 
 			auto& tr = reg.Write<TransformComponent>(e);
-			tr.Position = pose.Position;
-			tr.Rotation = QuatFromPitchYaw(pose.Pitch, pose.Yaw);
+			tr.Translation = pose.Position;
+			tr.SetRotation(QuatFromPitchYaw(pose.Pitch, pose.Yaw));
 
 			// Interactive focus only moves the camera; it must NOT reshape the frustum, or focusing a
 			// small object would shrink the far plane and clip the scene when you fly back out. Only the

@@ -603,6 +603,17 @@ namespace Snowstorm
 				propChanged = prop.set_value(instance, val);
 			}
 		}
+		else if (type == rttr::type::get<glm::vec3>() && prop.get_metadata("EulerDegrees").is_valid())
+		{
+			// Euler angles are STORED in radians (TransformComponent::RotationEuler) but authored in
+			// degrees, the way every engine's inspector shows them.
+			glm::vec3 degrees = glm::degrees(value.get_value<glm::vec3>());
+			LabelLeft(name.c_str());
+			if (ColoredVector(hidden.c_str(), glm::value_ptr(degrees), 3, 0.5f))
+			{
+				propChanged = prop.set_value(instance, glm::radians(degrees));
+			}
+		}
 		else if (type == rttr::type::get<glm::vec3>())
 		{
 			glm::vec3 val = value.get_value<glm::vec3>();
@@ -615,17 +626,6 @@ namespace Snowstorm
 			if (edited)
 			{
 				propChanged = prop.set_value(instance, val);
-			}
-		}
-		else if (type == rttr::type::get<glm::quat>())
-		{
-			// Orientation is stored as a quaternion; the inspector speaks Euler degrees (pitch, yaw, roll),
-			// the same convention Unity/Unreal/Godot show. Re-derived from the quaternion every frame.
-			glm::vec3 eulerDeg = EulerDegreesFromQuat(value.get_value<glm::quat>());
-			LabelLeft(name.c_str());
-			if (ColoredVector(hidden.c_str(), glm::value_ptr(eulerDeg), 3, 0.5f))
-			{
-				propChanged = prop.set_value(instance, QuatFromEulerDegrees(eulerDeg));
 			}
 		}
 		else if (type == rttr::type::get<glm::vec4>())

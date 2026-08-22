@@ -208,7 +208,7 @@ namespace Snowstorm
 		// Environment params from the current sky (linear HDR; sun = DirectionalLights[0]).
 		const bool haveSun = lights.LightCount > 0;
 		const glm::vec3 toSun = haveSun ? glm::normalize(-lights.Lights[0].Direction) : glm::vec3(0.0f);
-		const glm::vec3 sunColor = haveSun ? lights.Lights[0].Color * lights.Lights[0].Intensity : glm::vec3(0.0f);
+		const glm::vec3 sunColor = haveSun ? lights.Lights[0].Radiance * lights.Lights[0].Intensity : glm::vec3(0.0f);
 
 		// ---- Pass 1: capture the sky into the env cube (6 faces) ----
 		// Writes envCube as Storage; the graph transitions it to GENERAL before the dispatches.

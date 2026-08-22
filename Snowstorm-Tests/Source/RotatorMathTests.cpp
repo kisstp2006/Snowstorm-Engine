@@ -44,7 +44,7 @@ TEST_CASE("AdvanceRotation is identical serial vs parallel (data-parallel correc
 	uint64_t rng = 20260708u;
 	for (size_t i = 0; i < count; ++i)
 	{
-		serialTr[i].Rotation = QuatFromEulerRadians({RandFloat(rng, 0.0f, 6.28f), RandFloat(rng, 0.0f, 6.28f), RandFloat(rng, 0.0f, 6.28f)});
+		serialTr[i].SetRotation(QuatFromEulerRadians({RandFloat(rng, 0.0f, 6.28f), RandFloat(rng, 0.0f, 6.28f), RandFloat(rng, 0.0f, 6.28f)}));
 		rot[i].Axis = {RandFloat(rng, -1.0f, 1.0f), 1.0f, RandFloat(rng, -1.0f, 1.0f)};
 		rot[i].SpeedDegPerSec = RandFloat(rng, 15.0f, 90.0f);
 	}
@@ -76,10 +76,10 @@ TEST_CASE("AdvanceRotation is identical serial vs parallel (data-parallel correc
 	for (size_t i = 0; i < count; ++i)
 	{
 		// Bit-exact: same inputs, same math, distinct memory -> thread scheduling cannot change the result.
-		REQUIRE(serialTr[i].Rotation.x == parallelTr[i].Rotation.x);
-		REQUIRE(serialTr[i].Rotation.y == parallelTr[i].Rotation.y);
-		REQUIRE(serialTr[i].Rotation.z == parallelTr[i].Rotation.z);
-		REQUIRE(serialTr[i].Rotation.w == parallelTr[i].Rotation.w);
+		REQUIRE(serialTr[i].GetRotation().x == parallelTr[i].GetRotation().x);
+		REQUIRE(serialTr[i].GetRotation().y == parallelTr[i].GetRotation().y);
+		REQUIRE(serialTr[i].GetRotation().z == parallelTr[i].GetRotation().z);
+		REQUIRE(serialTr[i].GetRotation().w == parallelTr[i].GetRotation().w);
 	}
 }
 
@@ -88,20 +88,20 @@ TEST_CASE("AdvanceRotation is identical serial vs parallel (data-parallel correc
 TEST_CASE("AdvanceRotation leaves transform unchanged for degenerate rotators", "[ecs]")
 {
 	TransformComponent tr;
-	tr.Rotation = QuatFromEulerRadians({0.3f, 0.6f, 0.9f});
-	const glm::quat before = tr.Rotation;
+	tr.SetRotation(QuatFromEulerRadians({0.3f, 0.6f, 0.9f}));
+	const glm::quat before = tr.GetRotation();
 
 	RotatorComponent zeroAxis;
 	zeroAxis.Axis = {0.0f, 0.0f, 0.0f};
 	zeroAxis.SpeedDegPerSec = 45.0f;
 	AdvanceRotation(tr, zeroAxis, 1.0f / 60.0f);
-	REQUIRE(tr.Rotation == before);
+	REQUIRE(tr.GetRotation() == before);
 
 	RotatorComponent zeroSpeed;
 	zeroSpeed.Axis = {0.0f, 1.0f, 0.0f};
 	zeroSpeed.SpeedDegPerSec = 0.0f;
 	AdvanceRotation(tr, zeroSpeed, 1.0f / 60.0f);
-	REQUIRE(tr.Rotation == before);
+	REQUIRE(tr.GetRotation() == before);
 }
 
 // Euler <-> quaternion helpers are exact inverses for the YXZ convention the inspector and the camera

@@ -9,8 +9,12 @@ struct DirectionalLight
 {
 	float3 Direction;
 	float Intensity;
-	float3 Color;
-	float Padding;
+	float3 Radiance;
+	float ShadowAmount;   // per-light shadow darkness (multiplied by the global ShadowStrength)
+	float SourceTanAngle; // tan(angular radius) of the source disk -> penumbra width
+	uint SoftShadows;     // per-light penumbra toggle (ANDed with the global ShadowSoft)
+	float _Pad0;
+	float _Pad1;
 };
 
 // Positional lights. Mirror GPUPointLight / GPUSpotLight in LightingUniforms.hpp field-for-field.
@@ -19,11 +23,17 @@ struct PointLight
 {
 	float3 Position;
 	float Range;
-	float3 Color;
+	float3 Radiance;
 	float Intensity;
 	// Shadow slot: index into FrameCB.PointShadows (0..MAX_SHADOW_POINTS-1), or < 0 when unshadowed.
 	int ShadowSlot;
-	float3 ShadowPad;
+	float MinRadius; // inverse-square is clamped inside this radius
+	float Falloff;   // range-window shaping: 1 = default window, 0 = window squared
+	float SourceRadius;
+
+	float ShadowAmount;
+	uint SoftShadows;
+	float2 _Pad;
 };
 
 // 6-face shadow payload for one shadow-casting point light (cube unrolled into the point atlas). Mirrors
@@ -38,7 +48,7 @@ struct SpotLight
 {
 	float3 Position;
 	float Range;
-	float3 Color;
+	float3 Radiance;
 	float Intensity;
 	float3 Direction;
 	float CosInner;
@@ -46,7 +56,13 @@ struct SpotLight
 	// Shadow: ShadowIndex < 0 => no shadow. ShadowViewProj reprojects world -> this spot's light clip;
 	// ShadowAtlasRect (xy = UV offset, zw = UV scale) maps that into the spot's tile of the atlas.
 	int ShadowIndex;
-	float2 ShadowPad;
+	float AngleAttenuation; // exponent on the inner->outer cone blend
+	float Falloff;          // range-window shaping (see PointLight::Falloff)
+
+	float SourceRadius;
+	float ShadowAmount;
+	uint SoftShadows;
+	float _Pad;
 	float4x4 ShadowViewProj;
 	float4 ShadowAtlasRect;
 };
@@ -162,12 +178,11 @@ cbuffer FrameCB : register(b0, space0)
 	// Debug: 1 = output the isolated grayscale AO term (material AO * RTAO) instead of the shaded scene, for
 	// tuning the RTAO radius/intensity against the raw signal. Reuses a former pad slot.
 	uint DebugAO;
-	// Soft RT shadows (#118): SunAngularRadius is the sun's angular HALF-size in radians (= ½ angular
-	// diameter; real sun ~0.0047 rad). LightSourceRadius is a local light's physical radius in world units.
-	// Drive the shadow-ray cone jitter (bigger source => wider penumbra). Consumed only when ShadowSoft != 0
-	// in the RT path. SunAngularRadius fills the last pad; LightSourceRadius starts a new 16-byte row.
-	float SunAngularRadius;
-	float LightSourceRadius;
+	// Reserved: the soft-shadow source sizes used to be global here; they are per light now
+	// (DirectionalLight::SourceTanAngle, Point/SpotLight::SourceRadius). Kept as pads so every following
+	// field stays at its current offset. MUST match RendererService.cpp field-for-field.
+	float _ShadowPad0;
+	float _ShadowPad1;
 	// RT reflections (#118): RTReflEnabled gates the reflection trace (SS_RAYTRACING builds + a geometry
 	// table present); ReflIntensity scales the contribution; ReflMaxRoughness is the roughness cutoff
 	// (smoother = RT, rougher = the prefiltered cube). Reuse the former shadow-soft pad slots.

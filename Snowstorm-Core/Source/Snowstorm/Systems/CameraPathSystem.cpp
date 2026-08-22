@@ -51,8 +51,8 @@ namespace Snowstorm
 			// reg.Write marks TransformComponent Changed so CameraRuntimeUpdateSystem (Resolve) rebuilds
 			// View/Projection this frame. Roll (z) stays 0 for a level horizon.
 			auto& tr = reg.Write<TransformComponent>(e);
-			tr.Position = pose.Position;
-			tr.Rotation = QuatFromPitchYaw(pose.Pitch, pose.Yaw);
+			tr.Translation = pose.Position;
+			tr.SetRotation(QuatFromPitchYaw(pose.Pitch, pose.Yaw));
 		}
 	}
 }

@@ -272,14 +272,14 @@ namespace Snowstorm
 				continue;
 			}
 			const TransformComponent& cur = reg.Read<TransformComponent>(e);
-			if (glm::distance(cur.Position, lp) < 1e-6f && std::abs(glm::dot(cur.Rotation, lr)) > 1.0f - 1e-7f)
+			if (glm::distance(cur.Translation, lp) < 1e-6f && std::abs(glm::dot(cur.GetRotation(), lr)) > 1.0f - 1e-7f)
 			{
 				continue; // at rest: don't dirty the transform (keeps culling/TLAS quiet)
 			}
 			reg.patch<TransformComponent>(e, [&](TransformComponent& tr)
 			                              {
-				tr.Position = lp;
-				tr.Rotation = lr; });
+				tr.Translation = lp;
+				tr.SetRotation(lr); });
 		}
 	}
 

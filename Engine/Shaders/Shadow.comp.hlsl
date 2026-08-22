@@ -45,8 +45,8 @@ cbuffer ShadowCB : register(b3, space0)
 	uint SpotCastMask;  // bit i => spot light i casts
 	uint SoftEnabled;   // 1 => jitter the chosen ray within the light's area (soft penumbra); 0 => hard ray
 
-	float SunTanAngular;     // tan(sun angular half-size) -> directional cone radius for the soft jitter
-	float SourceRadius;      // local-light source radius (world units); spot/point cone radius = SourceRadius / dist
+	float _shPad0;           // reserved (keeps the 16-byte row; the source-size knobs are per light below)
+	float _shPad1;
 	uint RayCount;           // stochastic samples/pixel (render.shadows.rays): more = less variance, ~linear cost
 	uint ReflGeoTableAddrHi; // device address (hi) of the per-instance geometry table
 
@@ -66,6 +66,13 @@ cbuffer ShadowCB : register(b3, space0)
 	float4 SpotPosRange[SHADOW_MAX_SPOT];   // xyz = world pos, w = range
 	float4 SpotDirCos[SHADOW_MAX_SPOT];     // xyz = spot forward axis, w = cos(outer half-angle)
 	float4 SpotColorInner[SHADOW_MAX_SPOT]; // xyz = color*intensity, w = cos(inner half-angle)
+
+	// Per-light shadow + falloff knobs (the light components own these; SoftEnabled is only the master
+	// switch). A source size of 0 means a hard ray for that light even when SoftEnabled is on. The falloff
+	// fields MUST mirror DefaultLit's attenuation exactly -- this pass reconstructs the same irradiance.
+	float4 DirParams[SHADOW_MAX_DIR];     // x = cone radius (tan of the angular half-size), y = shadow amount
+	float4 PointParams[SHADOW_MAX_POINT]; // x = source radius (world), y = shadow amount, z = min radius, w = falloff
+	float4 SpotParams[SHADOW_MAX_SPOT];   // x = source radius, y = shadow amount, z = falloff, w = angle attenuation
 };
 
 float Luma3(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
@@ -159,10 +166,15 @@ float STBN(uint2 px, uint frame, uint dim)
 }
 
 // Windowed inverse-square attenuation, matching DefaultLit's point/spot falloff exactly.
-float FalloffWindow(float dist, float range)
+// Mirrors DefaultLit's positional attenuation: windowed inverse-square, the window shaped by `falloff`
+// (1 = as-is, towards 0 it squares up), the 1/d^2 clamped inside `minRadius`.
+float FalloffWindow(float dist, float range, float minRadius, float falloff)
 {
 	const float t = saturate(1.0 - pow(dist / range, 4.0));
-	return (t * t) / max(dist * dist, 1e-4);
+	float window = t * t;
+	window = lerp(window * window, window, saturate(falloff));
+	const float minR = max(minRadius, 1e-3);
+	return window / max(dist * dist, minR * minR);
 }
 
 // One-pass weighted reservoir selection over ALL in-range lights, weight = unshadowed contribution. `frame`
@@ -172,7 +184,8 @@ float FalloffWindow(float dist, float range)
 // ~1/K). Returns false when no light contributes here; else fills the chosen light's tracer params (direction
 // TO light, ray tMax, soft cone/disk radius, whether it casts a shadow).
 bool SelectLight(uint2 px, float3 positionWS, float3 N, float3 V, float roughness, uint frame, uint dimBase, out float3 outL,
-                 out float outTMax, out float outConeR, out bool outCasts, out float3 outRadNdotL, out float outWSum)
+                 out float outTMax, out float outConeR, out bool outCasts, out float3 outRadNdotL, out float outWSum,
+                 out float outAmount)
 {
 	float wSum = 0.0;
 	outL = float3(0, 0, 1);
@@ -181,6 +194,7 @@ bool SelectLight(uint2 px, float3 positionWS, float3 N, float3 V, float roughnes
 	outCasts = false;
 	outRadNdotL = float3(0, 0, 0); // chosen light's COLORED radiance * NdotL (pre-visibility), for the RIS estimate
 	outWSum = 0.0;
+	outAmount = 1.0; // chosen light's ShadowAmount (how dark its shadow goes)
 	bool have = false;
 	uint lightIdx = 0; // global stream index, for decorrelated randoms
 
@@ -199,9 +213,10 @@ bool SelectLight(uint2 px, float3 positionWS, float3 N, float3 V, float roughnes
 		{
 			outL = L;
 			outTMax = 1e30;
-			outConeR = SunTanAngular; // sun angular half-size
+			outConeR = DirParams[d].x; // this light's angular half-size (0 => hard ray)
 			outCasts = (DirCastMask & (1u << d)) != 0u;
 			outRadNdotL = radNdotL;
+			outAmount = DirParams[d].y;
 			have = true;
 		}
 	}
@@ -217,7 +232,7 @@ bool SelectLight(uint2 px, float3 positionWS, float3 N, float3 V, float roughnes
 			continue;
 		}
 		const float3 L = toLight / max(dist, 1e-4);
-		const float3 radNdotL = PointColor[p].xyz * FalloffWindow(dist, range) * max(dot(N, L), 0.0);
+		const float3 radNdotL = PointColor[p].xyz * FalloffWindow(dist, range, PointParams[p].z, PointParams[p].w) * max(dot(N, L), 0.0);
 		const float w = ImportanceWeight(radNdotL, N, V, L, roughness);
 		if (w <= 0.0)
 		{
@@ -228,9 +243,10 @@ bool SelectLight(uint2 px, float3 positionWS, float3 N, float3 V, float roughnes
 		{
 			outL = L;
 			outTMax = max(dist - 0.05, 0.0);
-			outConeR = SourceRadius / max(dist, 1e-4); // source disk subtends a wider cone up close
+			outConeR = PointParams[p].x / max(dist, 1e-4); // source disk subtends a wider cone up close
 			outCasts = (PointCastMask & (1u << p)) != 0u;
 			outRadNdotL = radNdotL;
+			outAmount = PointParams[p].y;
 			have = true;
 		}
 	}
@@ -253,8 +269,8 @@ bool SelectLight(uint2 px, float3 positionWS, float3 N, float3 V, float roughnes
 			continue;
 		}
 		const float denom = max(SpotColorInner[s].w - cosOuter, 1e-4); // .w = cos(inner)
-		const float cone = pow(saturate((cosAngle - cosOuter) / denom), 2.0);
-		const float3 radNdotL = SpotColorInner[s].xyz * FalloffWindow(dist, range) * cone * max(dot(N, L), 0.0);
+		const float cone = pow(saturate((cosAngle - cosOuter) / denom), max(SpotParams[s].w, 0.01));
+		const float3 radNdotL = SpotColorInner[s].xyz * FalloffWindow(dist, range, 0.01, SpotParams[s].z) * cone * max(dot(N, L), 0.0);
 		const float w = ImportanceWeight(radNdotL, N, V, L, roughness);
 		if (w <= 0.0)
 		{
@@ -265,9 +281,10 @@ bool SelectLight(uint2 px, float3 positionWS, float3 N, float3 V, float roughnes
 		{
 			outL = L;
 			outTMax = max(dist - 0.05, 0.0);
-			outConeR = SourceRadius / max(dist, 1e-4);
+			outConeR = SpotParams[s].x / max(dist, 1e-4);
 			outCasts = (SpotCastMask & (1u << s)) != 0u;
 			outRadNdotL = radNdotL;
+			outAmount = SpotParams[s].y;
 			have = true;
 		}
 	}
@@ -394,7 +411,8 @@ void main(uint3 id : SV_DispatchThreadID)
 		bool casts;
 		float3 radNdotL; // chosen light's colored radiance*NdotL (pre-visibility)
 		float wSum;      // Σ luma-contribution over all in-range lights (the RIS normalization)
-		if (!SelectLight(id.xy, positionWS, Ns, V, roughness, FrameCounter, dimBase, L, tMax, coneR, casts, radNdotL, wSum))
+		float amount;    // chosen light's ShadowAmount
+		if (!SelectLight(id.xy, positionWS, Ns, V, roughness, FrameCounter, dimBase, L, tMax, coneR, casts, radNdotL, wSum, amount))
 		{
 			continue; // no contributing light here -> 0 irradiance from this sample
 		}
@@ -408,6 +426,7 @@ void main(uint3 id : SV_DispatchThreadID)
 				hitTSum += hitT;
 				++hitCount;
 			}
+			vis = lerp(1.0, vis, saturate(amount)); // per-light shadow darkness
 		}
 		// RIS: estimate of the FULL colored sum from this one sample = radNdotL·vis · wSum / contrib_y.
 		const float contribY = ImportanceWeight(radNdotL, Ns, V, L, roughness); // MUST match SelectLight's weight or the RIS estimate biases

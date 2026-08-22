@@ -268,11 +268,11 @@ namespace Snowstorm
 		{
 			return glm::mat4(1.0f);
 		}
-		glm::mat4 world = reg.Read<TransformComponent>(entity.Handle()).GetTransformMatrix();
+		glm::mat4 world = reg.Read<TransformComponent>(entity.Handle()).GetTransform();
 		const auto* h = reg.try_get_const<HierarchyComponent>(entity.Handle());
 		for (entt::entity p = h ? h->Parent : entt::null; p != entt::null;)
 		{
-			world = reg.Read<TransformComponent>(p).GetTransformMatrix() * world;
+			world = reg.Read<TransformComponent>(p).GetTransform() * world;
 			const auto* ph = reg.try_get_const<HierarchyComponent>(p);
 			p = ph ? ph->Parent : entt::null;
 		}
@@ -339,8 +339,8 @@ namespace Snowstorm
 			{
 				reg.patch<TransformComponent>(child.Handle(), [&](TransformComponent& tr)
 				                              {
-					tr.Position = t;
-					tr.Rotation = r;
+					tr.Translation = t;
+					tr.SetRotation(r);
 					tr.Scale = s; });
 			}
 		}

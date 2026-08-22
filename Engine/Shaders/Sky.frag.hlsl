@@ -27,7 +27,7 @@ float4 main(SkyPSIn i) : SV_Target0
 	// Shared sky evaluation (also used by the IBL capture). Pull the gradient + sun from FrameCB; the
 	// sun's toSun is the negated light direction, zeroed when there is no directional light.
 	const float3 toSun = (LightCount > 0) ? normalize(-DirectionalLights[0].Direction) : float3(0, 0, 0);
-	const float3 sunColor = (LightCount > 0) ? DirectionalLights[0].Color * DirectionalLights[0].Intensity : float3(0, 0, 0);
+	const float3 sunColor = (LightCount > 0) ? DirectionalLights[0].Radiance * DirectionalLights[0].Intensity : float3(0, 0, 0);
 	const float3 sky = EvaluateSky(ray, SkyZenithColor, SkyHorizonColor, GroundColor, toSun, sunColor);
 
 	// Output raw linear radiance; the post-process pass (Tonemap.frag.hlsl, #53) applies exposure/ACES/sRGB.

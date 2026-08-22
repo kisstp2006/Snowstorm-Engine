@@ -32,8 +32,8 @@ namespace Snowstorm
 			Entity e = world.CreateEntity(name);
 
 			auto& tr = e.AddComponent<TransformComponent>();
-			tr.Position = pos;
-			tr.Rotation = QuatFromEulerRadians(rot);
+			tr.Translation = pos;
+			tr.SetRotation(QuatFromEulerRadians(rot));
 			tr.Scale = scale;
 
 			auto& mc = e.AddComponent<MeshComponent>();
@@ -102,14 +102,14 @@ namespace Snowstorm
 			auto a = world.CreateEntity("Stress Light A");
 			auto& la = a.AddComponent<DirectionalLightComponent>();
 			la.Direction = glm::normalize(glm::vec3(1.0f, -1.0f, 0.5f));
-			la.Color = glm::vec3(1.0f, 0.95f, 0.85f);
+			la.Radiance = glm::vec3(1.0f, 0.95f, 0.85f);
 			la.Intensity = 1.0f;
 			a.AddComponent<VisibilityComponent>().Mask = Visibility::Scene | Visibility::Game;
 
 			auto b = world.CreateEntity("Stress Light B");
 			auto& lb = b.AddComponent<DirectionalLightComponent>();
 			lb.Direction = glm::normalize(glm::vec3(-0.7f, -0.6f, -0.4f));
-			lb.Color = glm::vec3(0.7f, 0.8f, 1.0f);
+			lb.Radiance = glm::vec3(0.7f, 0.8f, 1.0f);
 			lb.Intensity = 0.7f;
 			b.AddComponent<VisibilityComponent>().Mask = Visibility::Scene | Visibility::Game;
 		}
@@ -170,8 +170,8 @@ namespace Snowstorm
 			Entity e = world.CreateEntity("Rotator");
 
 			auto& tr = e.AddComponent<TransformComponent>();
-			tr.Position = {frand(-half, half), frand(0.0f, 8.0f), frand(-half, half)};
-			tr.Rotation = QuatFromEulerRadians({frand(0.0f, glm::radians(360.0f)), frand(0.0f, glm::radians(360.0f)), frand(0.0f, glm::radians(360.0f))});
+			tr.Translation = {frand(-half, half), frand(0.0f, 8.0f), frand(-half, half)};
+			tr.SetRotation(QuatFromEulerRadians({frand(0.0f, glm::radians(360.0f)), frand(0.0f, glm::radians(360.0f)), frand(0.0f, glm::radians(360.0f))}));
 
 			auto& rot = e.AddComponent<RotatorComponent>();
 			rot.Axis = glm::normalize(glm::vec3(frand(-1.0f, 1.0f), 1.0f, frand(-1.0f, 1.0f)));

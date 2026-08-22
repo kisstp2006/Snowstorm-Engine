@@ -24,7 +24,7 @@ namespace
 		LightDataBlock l{};
 		l.LightCount = 1;
 		l.Lights[0].Direction = {1.2f, -1.4f, -0.7f};
-		l.Lights[0].Color = {1.0f, 0.97f, 0.9f};
+		l.Lights[0].Radiance = {1.0f, 0.97f, 0.9f};
 		l.Lights[0].Intensity = 1.0f;
 		return l;
 	}

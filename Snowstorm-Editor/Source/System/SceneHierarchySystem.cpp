@@ -345,18 +345,7 @@ namespace Snowstorm
 					}
 					ImGui::EndDisabled();
 
-					// RT soft-shadow light sizes (#118) — drive the penumbra width; only used by the RT soft path, so
-					// enable them only in Ray Traced mode with Soft on. Larger = softer. Needs TAA for a clean result.
-					ImGui::BeginDisabled(!(rtMode && CVars::ShadowSoft.Get()));
-					if (float sunAngle = CVars::ShadowSunAngleDeg.Get(); ImGui::SliderFloat("Sun Angle", &sunAngle, 0.0f, 10.0f, "%.2f deg", ImGuiSliderFlags_AlwaysClamp))
-					{
-						CVars::ShadowSunAngleDeg.Set(sunAngle);
-					}
-					if (float srcRadius = CVars::ShadowSourceRadius.Get(); ImGui::SliderFloat("Source Radius", &srcRadius, 0.0f, 2.0f, "%.2f m", ImGuiSliderFlags_AlwaysClamp))
-					{
-						CVars::ShadowSourceRadius.Set(srcRadius);
-					}
-					ImGui::EndDisabled();
+					// The penumbra width is per light now (Light Size on the light component), not a global knob.
 					if (rtMode)
 					{
 						ImGui::TextDisabled("(RT penumbra needs TAA for a clean result)");
@@ -435,7 +424,8 @@ namespace Snowstorm
 					ImGui::EndDisabled();
 					ImGui::EndDisabled();
 
-					// Strength: how dark shadows get (1 = full occlusion, 0 = none). Read into FrameCB each frame.
+					// Strength: the GLOBAL shadow-darkness multiplier (1 = full occlusion, 0 = none); each light's
+					// own Shadow Amount multiplies on top. Read into FrameCB each frame.
 					if (float strength = CVars::ShadowStrength.Get(); ImGui::SliderFloat("Strength", &strength, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp))
 					{
 						CVars::ShadowStrength.Set(strength);

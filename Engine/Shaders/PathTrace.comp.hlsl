@@ -43,7 +43,7 @@ cbuffer PTCB : register(b1, space0)
 	float ShadowStrength;
 
 	float3 SkyZenithColor;
-	float LightSourceRadius; // point/spot light physical radius (finite size for NEE); 0 = delta (hot-dot risk)
+	float _ptPadSky;       // reserved (16-byte row); light source size rides per light in the arrays below
 	float3 SkyHorizonColor;
 	float MaxBounceWeight; // path regularization: max per-bounce BSDF weight (0 = off); render.pathtrace.weightclamp
 	float3 GroundColor;
@@ -60,23 +60,29 @@ cbuffer PTCB : register(b1, space0)
 	uint _ptPad2;
 
 	// Positional lights for NEE, world space, raw-packed into float4 rows (avoids struct cbuffer packing
-	// surprises). Point: [2i] = xyz position, w range; [2i+1] = xyz color, w intensity. Max 16.
-	float4 PointLights[32];
-	// Spot: [4i] = pos.xyz, range; [4i+1] = color.xyz, intensity; [4i+2] = dir.xyz, cosInner; [4i+3].x = cosOuter. Max 16.
+	// surprises). Point: [3i] = pos.xyz, range; [3i+1] = radiance.xyz, intensity;
+	// [3i+2] = sourceRadius, minRadius, falloff, unused. Max 16.
+	float4 PointLights[48];
+	// Spot: [4i] = pos.xyz, range; [4i+1] = radiance.xyz, intensity; [4i+2] = dir.xyz, cosInner;
+	// [4i+3] = cosOuter, sourceRadius, falloff, angleAttenuation. Max 16.
 	float4 SpotLights[64];
 };
 
 static const uint MAX_PT_POINT_LIGHTS = 16u;
 static const uint MAX_PT_SPOT_LIGHTS = 16u;
 
-// Smooth inverse-square attenuation with a UE-style range cutoff (windowed so it reaches 0 at Range).
-float PositionalAttenuation(float dist, float range)
+// Smooth inverse-square attenuation with a UE-style range cutoff (windowed so it reaches 0 at Range),
+// shaped by the light's Falloff and clamped inside its MinRadius. Mirrors DefaultLit exactly.
+float PositionalAttenuation(float dist, float range, float minRadius, float falloff)
 {
-	float atten = 1.0 / max(dist * dist, 1e-4);
+	const float minR = max(minRadius, 1e-3);
+	float atten = 1.0 / max(dist * dist, minR * minR);
 	if (range > 0.0)
 	{
 		const float t = saturate(1.0 - pow(dist / range, 4.0));
-		atten *= t * t;
+		float window = t * t;
+		window = lerp(window * window, window, saturate(falloff));
+		atten *= window;
 	}
 	return atten;
 }
@@ -610,8 +616,9 @@ void main(uint3 id : SV_DispatchThreadID)
 			const uint pc = min(PointCount, MAX_PT_POINT_LIGHTS);
 			for (uint pli = 0; pli < pc; ++pli)
 			{
-				const float4 p0 = PointLights[pli * 2u];
-				const float4 p1 = PointLights[pli * 2u + 1u];
+				const float4 p0 = PointLights[pli * 3u];
+				const float4 p1 = PointLights[pli * 3u + 1u];
+				const float4 p2 = PointLights[pli * 3u + 2u]; // x = source radius, y = min radius, z = falloff
 				const float3 lightPos = p0.xyz;
 				const float range = p0.w;
 				const float3 d = lightPos - h.pos;
@@ -623,7 +630,7 @@ void main(uint3 id : SV_DispatchThreadID)
 				// Finite light size: sample within the cone the light's sphere subtends, so its reflection on
 				// smooth surfaces is a converging soft highlight, not a delta hot pixel. radius 0 => delta.
 				const float3 toL = d / dist;
-				const float sinHalf = saturate(LightSourceRadius / dist);
+				const float sinHalf = saturate(p2.x / dist);
 				const float cosMax = sqrt(max(0.0, 1.0 - sinHalf * sinHalf));
 				const float3 L = SampleCone(toL, cosMax, NextFloat(rng), NextFloat(rng));
 				if (dot(h.N, L) <= 0.0)
@@ -631,7 +638,7 @@ void main(uint3 id : SV_DispatchThreadID)
 					continue;
 				}
 				const float vis = RTShadow(h.pos, h.Ng, L, dist, tableAddr);
-				const float atten = PositionalAttenuation(dist, range);
+				const float atten = PositionalAttenuation(dist, range, p2.y, p2.z);
 				radiance += throughput * EvalBsdf(h, V, L) * p1.xyz * p1.w * atten * vis * TerminatorG(h.Ng, h.N, L);
 			}
 
@@ -642,7 +649,8 @@ void main(uint3 id : SV_DispatchThreadID)
 				const float4 s0 = SpotLights[sli * 4u];
 				const float4 s1 = SpotLights[sli * 4u + 1u];
 				const float4 s2 = SpotLights[sli * 4u + 2u];
-				const float cosOuter = SpotLights[sli * 4u + 3u].x;
+				const float4 s3 = SpotLights[sli * 4u + 3u]; // x = cosOuter, y = source radius, z = falloff, w = angle atten
+				const float cosOuter = s3.x;
 				const float3 lightPos = s0.xyz;
 				const float range = s0.w;
 				const float3 spotDir = s2.xyz; // direction the spot points (world)
@@ -656,12 +664,14 @@ void main(uint3 id : SV_DispatchThreadID)
 				const float3 toL = d / dist;
 				// Spot cone falloff on the CENTER direction (stable); the BRDF/shadow use the finite-size sample.
 				const float cd = dot(normalize(spotDir), -toL);
-				const float cone = smoothstep(cosOuter, cosInner, cd);
+				// Same inner->outer blend as DefaultLit (exponent = the light's AngleAttenuation), so the
+				// path-traced view matches the raster/RT one instead of using its own smoothstep.
+				const float cone = pow(saturate((cd - cosOuter) / max(cosInner - cosOuter, 1e-4)), max(s3.w, 0.01));
 				if (cone <= 0.0)
 				{
 					continue;
 				}
-				const float sinHalf = saturate(LightSourceRadius / dist);
+				const float sinHalf = saturate(s3.y / dist);
 				const float cosMax = sqrt(max(0.0, 1.0 - sinHalf * sinHalf));
 				const float3 L = SampleCone(toL, cosMax, NextFloat(rng), NextFloat(rng));
 				if (dot(h.N, L) <= 0.0)
@@ -669,7 +679,7 @@ void main(uint3 id : SV_DispatchThreadID)
 					continue;
 				}
 				const float vis = RTShadow(h.pos, h.Ng, L, dist, tableAddr);
-				const float atten = PositionalAttenuation(dist, range) * cone;
+				const float atten = PositionalAttenuation(dist, range, 0.01, s3.z) * cone;
 				radiance += throughput * EvalBsdf(h, V, L) * s1.xyz * s1.w * atten * vis * TerminatorG(h.Ng, h.N, L);
 			}
 

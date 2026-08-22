@@ -26,6 +26,6 @@ namespace Snowstorm
 
 		// Incremental rotation about the LOCAL axis: post-multiply. Normalize to keep the quaternion unit
 		// length over thousands of frames.
-		tr.Rotation = glm::normalize(tr.Rotation * glm::angleAxis(deltaAngle, axis));
+		tr.SetRotation(glm::normalize(tr.GetRotation() * glm::angleAxis(deltaAngle, axis)));
 	}
 }

@@ -172,10 +172,6 @@ namespace Snowstorm::CVars
 
 	CVar<bool> ShadowImportanceSpecular{"render.shadows.importance.specular", true, "Stochastic RT shadow reservoir target: ON = combined diffuse+specular importance (boost each light's diffuse-luma weight by its capped specular response, so the SAME reservoir also samples the specular-dominant light well -> lower specular-visibility noise on glossy/rough surfaces). OFF = diffuse-only importance (specular visibility reuses the diffuse selection, unbiased but noisier where the specular-dominant light has low diffuse weight). Used identically in the reservoir AND the RIS normalization so the estimate stays unbiased; the specular boost is capped so a near-mirror light can't starve diffuse.", CVarFlags::Persist};
 
-	CVar<float> ShadowSunAngleDeg{"render.shadow.sun_angle_deg", 1.0f, "Sun angular diameter in degrees — drives RT soft-shadow penumbra width for the directional light (real sun ~0.53 deg; larger = softer). Only used by the RT soft path.", CVarFlags::Persist};
-
-	CVar<float> ShadowSourceRadius{"render.shadow.source_radius", 0.1f, "Local light (spot/point) source radius in world units — drives RT soft-shadow penumbra width (larger/closer source = softer). Only used by the RT soft path.", CVarFlags::Persist};
-
 	CVar<bool> IBL{"render.ibl", true, "Bake + use image-based lighting from the sky (off = analytic hemisphere ambient)", CVarFlags::Persist};
 
 	CVar<float> IBLIntensity{"render.ibl.intensity", 0.75f, "Multiplier on the IBL ambient contribution", CVarFlags::Persist};

@@ -90,10 +90,11 @@ namespace Snowstorm
 			uint32_t FrameCounter = 0;
 			// Debug: 1 = DefaultLit outputs the isolated grayscale AO term (for tuning). Reuses a pad slot.
 			uint32_t DebugAO = 0;
-			// Soft RT shadows (#118): SunAngularRadius = sun angular half-size (radians); LightSourceRadius =
-			// local light physical radius (world units). Drive the shadow-ray cone jitter. Match Engine.hlsli.
-			float SunAngularRadius = 0.0f;
-			float LightSourceRadius = 0.1f;
+			// Reserved: the soft-shadow source sizes used to live here as globals; they are per light now
+			// (GPUDirectionalLight::SourceTanAngle / GPUPoint|SpotLight::SourceRadius). Kept as pads so every
+			// following field stays at its current offset. Match Engine.hlsli.
+			float _ShadowPad0 = 0.0f;
+			float _ShadowPad1 = 0.0f;
 			// Ray-traced reflections (#118): RTReflEnabled gates the reflection trace; ReflIntensity scales the
 			// contribution; ReflMaxRoughness is the roughness cutoff. Reuse the former shadow-soft pad slots.
 			uint32_t RTReflEnabled = 0;
@@ -321,8 +322,6 @@ namespace Snowstorm
 		frame.ShadowTexelSize = 1.0f / static_cast<float>(fd.Shadow.ShadowResolution != 0 ? fd.Shadow.ShadowResolution : 2048u);
 		// Soft RT shadow sizes (#118): the sun's angular RADIUS = ½ its angular diameter (deg -> rad); a local
 		// light's physical source radius. Drive the shadow-ray cone jitter in the RT soft path.
-		frame.SunAngularRadius = glm::radians(CVars::ShadowSunAngleDeg.Get()) * 0.5f;
-		frame.LightSourceRadius = CVars::ShadowSourceRadius.Get();
 		// RT shadow (#118): active only in shadow mode Ray Traced AND on an RT device (ShadowsRTActive folds
 		// both checks). The shader's ray-query branch is compiled out on non-RT devices, so this stays 0
 		// there. A pass may force raster (the compare GT render) so the RT-vs-raster metric has a reference.

@@ -89,7 +89,7 @@ namespace Snowstorm
 					continue;
 				}
 				const auto& rt = reg.Read<CameraRuntimeComponent>(e);
-				const glm::vec3 camPos = reg.Read<TransformComponent>(e).Position;
+				const glm::vec3 camPos = reg.Read<TransformComponent>(e).Translation;
 				// Camera forward = -Z of the view matrix's inverse == the third row of the view basis negated.
 				// The view matrix rows are the camera basis; row 2 is the camera's +Z (backward), so forward
 				// is its negation.
@@ -257,7 +257,7 @@ namespace Snowstorm
 			glm::vec3 pos, forward;
 			EditorSpawnPose(*m_World, pos, forward);
 			auto& tr = created.AddComponent<TransformComponent>();
-			tr.Position = pos;
+			tr.Translation = pos;
 
 			configure(created, forward);
 
@@ -271,23 +271,23 @@ namespace Snowstorm
 		{
 			auto& dl = e.AddComponent<DirectionalLightComponent>();
 			dl.Direction = fwd;
-			dl.Color = glm::vec3(1.0f, 0.98f, 0.95f);
+			dl.Radiance = glm::vec3(1.0f, 0.98f, 0.95f);
 			dl.Intensity = 1.0f;
 			e.AddComponent<VisibilityComponent>();
 		};
 		const auto addPoint = [](Entity e, const glm::vec3&)
 		{
 			auto& pl = e.AddComponent<PointLightComponent>();
-			pl.Color = glm::vec3(1.0f);
+			pl.Radiance = glm::vec3(1.0f);
 			pl.Intensity = 50.0f;
 			pl.Range = 10.0f;
 			e.AddComponent<VisibilityComponent>();
 		};
 		const auto addSpot = [](Entity e, const glm::vec3& fwd)
 		{
-			e.GetComponentMutable_Untracked<TransformComponent>().Rotation = QuatLookingAlong(fwd);
+			e.GetComponentMutable_Untracked<TransformComponent>().SetRotation(QuatLookingAlong(fwd));
 			auto& sl = e.AddComponent<SpotLightComponent>();
-			sl.Color = glm::vec3(1.0f);
+			sl.Radiance = glm::vec3(1.0f);
 			sl.Intensity = 80.0f;
 			sl.Range = 20.0f;
 			e.AddComponent<VisibilityComponent>();
@@ -308,7 +308,7 @@ namespace Snowstorm
 		// the editor's own DoNotSerialize Scene-view camera — this one lives in the scene.
 		const auto addCamera = [](Entity e, const glm::vec3& fwd)
 		{
-			e.GetComponentMutable_Untracked<TransformComponent>().Rotation = QuatLookingAlong(fwd);
+			e.GetComponentMutable_Untracked<TransformComponent>().SetRotation(QuatLookingAlong(fwd));
 			auto& cc = e.AddComponent<CameraComponent>();
 			cc.Projection = CameraComponent::ProjectionType::Perspective;
 			cc.PerspectiveFOV = 0.785398f;

@@ -37,8 +37,8 @@ namespace Snowstorm
 			uint32_t SpotCastMask = 0;
 			uint32_t SoftEnabled = 0;
 
-			float SunTanAngular = 0.0f;
-			float SourceRadius = 0.0f;
+			float _Pad0 = 0.0f; // reserved (16-byte row); the source-size knobs are per light below
+			float _Pad1 = 0.0f;
 			uint32_t RayCount = 1;
 			uint32_t ReflGeoTableAddrHi = 0; // geometry table device address (hi)
 
@@ -58,6 +58,11 @@ namespace Snowstorm
 			glm::vec4 SpotPosRange[MAX_SPOT_LIGHTS]{};    // xyz = pos, w = range
 			glm::vec4 SpotDirCos[MAX_SPOT_LIGHTS]{};      // xyz = dir, w = cos(outer)
 			glm::vec4 SpotColorInner[MAX_SPOT_LIGHTS]{};  // xyz = color*intensity, w = cos(inner)
+
+			// Per-light shadow + falloff knobs, straight off the light components (see Shadow.comp.hlsl).
+			glm::vec4 DirParams[MAX_DIRECTIONAL_LIGHTS]{}; // x = cone radius (tan angular half-size), y = shadow amount
+			glm::vec4 PointParams[MAX_POINT_LIGHTS]{};     // x = source radius, y = shadow amount, z = min radius, w = falloff
+			glm::vec4 SpotParams[MAX_SPOT_LIGHTS]{};       // x = source radius, y = shadow amount, z = falloff, w = angle attenuation
 		};
 
 		// Binding indices in Shadow.comp.hlsl set 0 (same layout as AO.comp.hlsl).
@@ -115,8 +120,7 @@ namespace Snowstorm
 
 	void RTShadowPass::Dispatch(const Ref<CommandContext>& ctx, const uint32_t frameIndex, const glm::mat4& invViewProj,
 	                            const LightDataBlock& lights, const float normalBias, const uint32_t frameCounter,
-	                            const bool soft, const float sunTanAngular, const float sourceRadius,
-	                            const uint32_t rayCount, const uint64_t tableAddr, const glm::vec3& cameraPosition,
+	                            const bool soft, const uint32_t rayCount, const uint64_t tableAddr, const glm::vec3& cameraPosition,
 	                            const Ref<TextureView>& gbuffer, const Ref<TextureView>& shadingNormal,
 	                            const Ref<TextureView>& depth, const Ref<TextureView>& output,
 	                            const Ref<TextureView>& specOutput, const uint32_t outW, const uint32_t outH)
@@ -138,8 +142,6 @@ namespace Snowstorm
 		cb.NormalBias = normalBias;
 		cb.FrameCounter = frameCounter;
 		cb.SoftEnabled = soft ? 1u : 0u;
-		cb.SunTanAngular = sunTanAngular;
-		cb.SourceRadius = sourceRadius;
 		cb.RayCount = rayCount;
 		cb.ReflGeoTableAddrLo = static_cast<uint32_t>(tableAddr & 0xFFFFFFFFull); // cutout any-hit alpha test
 		cb.ReflGeoTableAddrHi = static_cast<uint32_t>(tableAddr >> 32);
@@ -154,7 +156,9 @@ namespace Snowstorm
 		{
 			const GPUDirectionalLight& L = lights.Lights[i];
 			cb.DirData[i] = glm::vec4(glm::normalize(-L.Direction), 0.0f);
-			cb.DirColor[i] = glm::vec4(L.Color * L.Intensity, 0.0f); // radiance (no attenuation for the sun)
+			cb.DirColor[i] = glm::vec4(L.Radiance * L.Intensity, 0.0f); // radiance (no attenuation for the sun)
+			// A light with SoftShadows off gets cone radius 0 => hard ray, whatever the global soft switch says.
+			cb.DirParams[i] = glm::vec4(L.SoftShadows != 0 ? L.SourceTanAngle : 0.0f, L.ShadowAmount, 0.0f, 0.0f);
 			cb.DirCastMask |= (1u << i);
 		}
 
@@ -166,7 +170,8 @@ namespace Snowstorm
 		{
 			const GPUPointLight& L = lights.PointLights[i];
 			cb.PointPosRange[i] = glm::vec4(L.Position, L.Range);
-			cb.PointColor[i] = glm::vec4(L.Color * L.Intensity, 0.0f); // radiance pre-attenuation (shader applies falloff)
+			cb.PointColor[i] = glm::vec4(L.Radiance * L.Intensity, 0.0f); // radiance pre-attenuation (shader applies falloff)
+			cb.PointParams[i] = glm::vec4(L.SoftShadows != 0 ? L.SourceRadius : 0.0f, L.ShadowAmount, L.MinRadius, L.Falloff);
 			if (L.ShadowSlot >= 0)
 			{
 				cb.PointCastMask |= (1u << i);
@@ -180,7 +185,8 @@ namespace Snowstorm
 			const GPUSpotLight& L = lights.SpotLights[i];
 			cb.SpotPosRange[i] = glm::vec4(L.Position, L.Range);
 			cb.SpotDirCos[i] = glm::vec4(L.Direction, L.CosOuter);
-			cb.SpotColorInner[i] = glm::vec4(L.Color * L.Intensity, L.CosInner); // xyz=radiance, w=cos(inner)
+			cb.SpotColorInner[i] = glm::vec4(L.Radiance * L.Intensity, L.CosInner); // xyz=radiance, w=cos(inner)
+			cb.SpotParams[i] = glm::vec4(L.SoftShadows != 0 ? L.SourceRadius : 0.0f, L.ShadowAmount, L.Falloff, L.AngleAttenuation);
 			if (L.ShadowIndex >= 0)
 			{
 				cb.SpotCastMask |= (1u << i);

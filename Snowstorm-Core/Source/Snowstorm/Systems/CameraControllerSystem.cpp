@@ -166,7 +166,7 @@ namespace Snowstorm
 		// the camera already points instead of snapping to zero on the first frame.
 		if (!rtState.Initialized)
 		{
-			const glm::vec3 euler = EulerRadiansFromQuat(tr.Rotation);
+			const glm::vec3 euler = EulerRadiansFromQuat(tr.GetRotation());
 			rtState.Pitch = rtState.TargetPitch = euler.x;
 			rtState.Yaw = rtState.TargetYaw = euler.y;
 			rtState.Initialized = true;
@@ -203,7 +203,7 @@ namespace Snowstorm
 			const float a = SmoothAlpha(ctrl.LookSmoothing, dt);
 			rtState.Pitch += (rtState.TargetPitch - rtState.Pitch) * a;
 			rtState.Yaw += (rtState.TargetYaw - rtState.Yaw) * a;
-			tr.Rotation = QuatFromPitchYaw(rtState.Pitch, rtState.Yaw);
+			tr.SetRotation(QuatFromPitchYaw(rtState.Pitch, rtState.Yaw));
 		}
 
 		// Axes computed AFTER look so movement uses the (eased) current orientation.
@@ -239,7 +239,7 @@ namespace Snowstorm
 					}
 					else
 					{
-						tr.Position += forward * notchDistance;
+						tr.Translation += forward * notchDistance;
 					}
 				}
 				else
@@ -254,7 +254,7 @@ namespace Snowstorm
 		// smoothly even if the cursor leaves the viewport mid-coast). Move by the current velocity, then decay.
 		if (rtState.ZoomVelocity != 0.0f)
 		{
-			tr.Position += forward * rtState.ZoomVelocity * dt;
+			tr.Translation += forward * rtState.ZoomVelocity * dt;
 			rtState.ZoomVelocity *= std::exp(-ctrl.ZoomSmoothing * dt);
 			if (std::abs(rtState.ZoomVelocity) < 1e-4f)
 			{
@@ -317,6 +317,6 @@ namespace Snowstorm
 			rtState.MoveVelocity = glm::vec3(0.0f);
 		}
 
-		tr.Position += rtState.MoveVelocity * dt;
+		tr.Translation += rtState.MoveVelocity * dt;
 	}
 }
