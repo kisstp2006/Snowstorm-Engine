@@ -297,8 +297,14 @@ namespace Snowstorm
 					// inspector is the authored on/off above this. Ray Traced is only selectable on an RT-capable GPU
 					// (the shader's RT path is compiled out otherwise); grey it out on a non-RT device.
 					const bool rtSupported = Renderer::IsRayTracingSupported();
+					// Clamp against what this DEVICE offers, not the static 0..2 range: a config or CLI carrying
+					// mode 2 onto a non-RT GPU would otherwise leave the combo showing a blank preview (index past
+					// its item count) and enable the RT sub-controls for an effect the helpers report as Off. The
+					// clamp is display-only, deliberately: writing it back would erase the setting on the round
+					// trip to an RT machine, and *RTActive() already folds in device support.
+					const int maxMode = rtSupported ? 2 : 1;
 					int mode = CVars::ShadowsMode.Get();
-					if (mode < 0 || mode > 2)
+					if (mode < 0 || mode > maxMode)
 					{
 						mode = 1;
 					}
@@ -310,6 +316,10 @@ namespace Snowstorm
 						{
 							CVars::ShadowsMode.Set(mode);
 						}
+					}
+					if (!rtSupported)
+					{
+						ImGui::TextDisabled("(Ray Traced requires an RT-capable GPU)");
 					}
 
 					const bool rasterMode = (mode == 1);
@@ -367,11 +377,13 @@ namespace Snowstorm
 					}
 					ImGui::EndDisabled();
 
-					// Half-res RT sun-shadow controls (RT-only; the raster map has neither). RT Resolution mirrors the
-					// AO/GI Resolution slider: the sun-visibility trace runs at this fraction of viewport res, then a
-					// bilateral upsample restores full res (1.0 = full-res reference). Normal Bias offsets the ray
-					// origin off the surface — the acne (too small) vs peter-panning (too large) dial.
-					ImGui::BeginDisabled(!rtMode);
+					// Half-res stochastic-pass controls. Every CVar below is read only by RTShadowEffect, whose
+					// ShouldRun requires ShadowStochasticActive(), so they do nothing with Stochastic off (its
+					// default) even in Ray Traced mode, so gate on both, like the Soft-dependent sliders above. RT
+					// Resolution mirrors the AO/GI Resolution slider: the visibility trace runs at this fraction of
+					// viewport res, then a bilateral upsample restores full res (1.0 = full-res reference). Normal
+					// Bias offsets the ray origin off the surface: the acne (too small) vs peter-panning (too large) dial.
+					ImGui::BeginDisabled(!(rtMode && CVars::ShadowStochastic.Get()));
 					if (float shScale = CVars::ShadowScale.Get(); ImGui::SliderFloat("RT Resolution", &shScale, 0.25f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp))
 					{
 						CVars::ShadowScale.Set(shScale);
@@ -444,7 +456,7 @@ namespace Snowstorm
 					{
 						const bool aoRtSupported = Renderer::IsRayTracingSupported();
 						int mode = CVars::AoMode.Get();
-						if (mode < 0 || mode > 2)
+						if (mode < 0 || mode > (aoRtSupported ? 2 : 1)) // clamp to what the device offers; see Shadows
 						{
 							mode = 0;
 						}
@@ -562,7 +574,7 @@ namespace Snowstorm
 					{
 						const bool reflRtSupported = Renderer::IsRayTracingSupported();
 						int mode = CVars::ReflectionsMode.Get();
-						if (mode < 0 || mode > 2)
+						if (mode < 0 || mode > (reflRtSupported ? 2 : 1)) // clamp to what the device offers; see Shadows
 						{
 							mode = 0;
 						}
@@ -664,29 +676,37 @@ namespace Snowstorm
 				if (ImGui::CollapsingHeader("Global Illumination", ImGuiTreeNodeFlags_DefaultOpen))
 				{
 
-					// Ray-traced 1-bounce diffuse GI (#118): from each shaded point, gather hemisphere rays, shade the
-					// hits, and REPLACE the diffuse ambient with that scene-derived indirect (color bleeding + contact
-					// fill). RT-only; the shader branch is compiled out on a non-RT GPU. A hemisphere integral is noisier
-					// than one ray, so it needs TAA even more than the other RT effects; the sliders are enabled only when
-					// RT GI is on.
+					// 1-bounce diffuse GI (#151): gather indirect light over the hemisphere and REPLACE the diffuse
+					// ambient with that scene-derived indirect (color bleeding + contact fill). SSGI marches the depth
+					// buffer and bounces the previous frame's color (any GPU); RT traces the scene and shades the hits
+					// (RT GPU only, shader branch compiled out otherwise). Both write the same GI target and share the
+					// temporal + à-trous tail, so this combo IS the thesis A/B flip. A hemisphere integral is noisier
+					// than one ray, so it needs TAA even more than the other effects.
 					{
 						const bool giRtSupported = Renderer::IsRayTracingSupported();
-						ImGui::BeginDisabled(!giRtSupported);
-						if (bool giRt = CVars::GIRT.Get(); ImGui::Checkbox("Ray-traced (RT)##GI", &giRt))
+						int giMode = CVars::GiMode.Get();
+						if (giMode < 0 || giMode > (giRtSupported ? 2 : 1)) // clamp to what the device offers; see Shadows
 						{
-							CVars::GIRT.Set(giRt);
+							giMode = 0;
 						}
-						ImGui::EndDisabled();
+						{
+							const char* giModeLabels[] = {"Off", "SSGI", "Ray Traced"};
+							const int giModeCount = giRtSupported ? 3 : 2; // hide Ray Traced when the device can't do it
+							if (ImGui::Combo("Technique##GI", &giMode, giModeLabels, giModeCount))
+							{
+								CVars::GiMode.Set(giMode);
+							}
+						}
 						if (!giRtSupported)
 						{
-							ImGui::TextDisabled("(requires an RT-capable GPU)");
+							ImGui::TextDisabled("(Ray Traced requires an RT-capable GPU)");
 						}
 						else
 						{
 							ImGui::TextDisabled("(replaces diffuse ambient; needs TAA)");
 						}
 
-						ImGui::BeginDisabled(!CVars::GIRT.Get());
+						ImGui::BeginDisabled(giMode == 0);
 						if (float giIntensity = CVars::GIIntensity.Get(); ImGui::SliderFloat("Intensity##GI", &giIntensity, 0.0f, 4.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp))
 						{
 							CVars::GIIntensity.Set(giIntensity);

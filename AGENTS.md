@@ -26,10 +26,10 @@ ctest --preset debug                  # Catch2 unit tests
 `Scripts/Generate-Solution.bat` wraps the first two lines for double-click use. Visual Studio also
 understands the presets directly (*File > Open > Folder*, pick a preset). There is a `vs2022`
 preset (v143) for machines without VS 2026 — hosted CI uses it. **Snowstorm-Editor** is the
-startup project; the debugger working directory is the repo root, so relative `Assets/...` paths
-resolve. Vulkan validation layers are wired via `VK_ADD_LAYER_PATH` pointing at the manifest's
-installed `bin` dir (`build/vcpkg_installed/x64-windows/bin`), both in the VS debugger environment
-and baked into Debug builds (`SS_VULKAN_LAYER_PATH`).
+startup project; the debugger working directory is the repo root, so relative `Engine/...` and
+`Projects/...` paths resolve. Vulkan validation layers are wired via `VK_ADD_LAYER_PATH` pointing at
+the manifest's installed `bin` dir (`build/vcpkg_installed/x64-windows/bin`), both in the VS debugger
+environment and baked into Debug builds (`SS_VULKAN_LAYER_PATH`).
 
 **The MSVC toolset pin must match what vcpkg builds with.** vcpkg compiles dependencies with the
 newest installed MSVC; the preset pins the project to the same exact version (`toolset` field).
@@ -54,9 +54,13 @@ build\Snowstorm-Runtime\Debug\Snowstorm-Runtime.exe
 
 `SS_VALIDATION_NONFATAL=1` makes every validation error log instead of asserting on the first one,
 so one run surfaces all of them. `SS_VALIDATION_EXTRA=1` additionally enables synchronization and
-best-practices validation (noisy, advisory). It needs a **real GPU/display** (Vulkan), so it is a
-**local** gate — hosted CI only compiles. GPU resources are named via `SetVulkanObjectName`
-(`VK_EXT_debug_utils`), so validation/RenderDoc report e.g. `Swapchain[0]` instead of a raw handle.
+best-practices validation (noisy, advisory). **GPU-assisted validation** is a separate, much heavier
+tier behind `validation.gpu` (`SS_VALIDATION_GPU=1`): it instruments shaders and AS builds on the
+device to catch out-of-bounds descriptor/BDA access that CPU-side validation cannot see — turn it on
+only when hunting an on-device fault (a `DEVICE_LOST` with no CPU-side message above it). All of this
+needs a **real GPU/display** (Vulkan), so it is a **local** gate — hosted CI only compiles. GPU
+resources are named via `SetVulkanObjectName` (`VK_EXT_debug_utils`), so validation/RenderDoc report
+e.g. `Swapchain[0]` instead of a raw handle.
 
 The engine also keeps its headless instrumentation hooks (`perf.bench.frames` writes averaged
 per-pass GPU timings to JSON; `quality.capture.frames` dumps the final present) for ad-hoc A/B
@@ -68,18 +72,25 @@ them — compare runs by hand and re-check with the editor's Performance panel.
 Engine flags go through a small CVar registry (`Snowstorm/Utility/CVar.hpp`) instead of ad-hoc
 `std::getenv`. Declare engine-wide CVars in `Snowstorm/Core/EngineCVars.{hpp,cpp}`; each
 self-registers and is resolved once at startup by `CVarRegistry::Initialize(argc, argv)` (called in
-`EntryPoint.hpp`) from, in increasing priority: **default → environment → CLI**.
+`EntryPoint.hpp`) from, in increasing priority: **default → `SnowstormConfig.cfg` →
+`SnowstormStartup.cfg` → environment → CLI**. `SnowstormConfig.cfg` is auto-saved by the editor on
+shutdown and holds persistent CVars only; `SnowstormStartup.cfg` is hand-authored, never written by
+the app, and can carry any CVar, so it is the safe place for machine-local toggles the auto-save
+cannot clobber. `config.ignore` (`SS_CONFIG_IGNORE=1`) skips both files, which is what the benchmark
+harnesses set so a run depends on code defaults plus its own overrides, never on local settings.
 
 A CVar named `validation.extra` is set by env `SS_VALIDATION_EXTRA` **or** CLI `--validation.extra`
 (dots→`_`, uppercased, `SS_` prefix for env). Bools accept presence (`--flag`, or env set to
 anything but `0`/`false`/`off`/`no`). Run any executable with `--list-cvars` (or `--help`) to print
-every CVar with its value, type, env name, and description. Current CVars include `smoke.frames`,
-`validation.nonfatal`, `validation.extra`, `sim.fixed_hz` (run `--list-cvars` for all). Startup resolution is read-once (env → CLI), but CVars can now also
-be **edited live at runtime** from the editor's *Debug > Console Variables* panel (`CVarPanelSystem`):
-it lists every CVar with a type-appropriate widget (checkbox/int/float) plus a `name value` command
-line, via typed accessors on `ICVar` (`GetKind`/`Get*`/`Set*`). Most engine CVars are read per-frame
-through `.Get()` (shadows, IBL, exposure, shadow quality), so edits take effect immediately. A
-config-file source is still a planned follow-up.
+every CVar with its value, type, env name, and description. `EngineCVars.cpp` declares 125 of them
+(rendering technique modes, denoiser knobs, path tracer, benchmark hooks, validation); treat
+`--list-cvars` as the authoritative list rather than any enumeration here. Startup resolution runs
+once, but CVars can also be **edited live at runtime** from the editor's *Debug > Console Variables*
+panel (`CVarPanelSystem`): it lists every CVar with a type-appropriate widget (checkbox/int/float)
+plus a `name value` command line, via typed accessors on `ICVar` (`GetKind`/`Get*`/`Set*`). Most
+engine CVars are read per-frame through `.Get()` (shadows, IBL, exposure, shadow quality), so edits
+take effect immediately, and those marked `CVarFlags::Persist` are written back to
+`SnowstormConfig.cfg` on shutdown (`SnowstormStartup.cfg` is the hand-authored read-only companion).
 
 ## Layout
 
@@ -90,7 +101,10 @@ Snowstorm-Core/      # STATIC library: all engine code (the only place most work
 Snowstorm-Physics-Jolt/ # STATIC module lib: Jolt Physics bound to the ECS (IModule "PhysicsJolt")
 Snowstorm-Editor/    # Editor EXECUTABLE — links Core; ImGui dockspace, panels, viewport
 Snowstorm-Runtime/   # Editor-free runtime EXECUTABLE — links Core; assembled from {Core} modules only
-Assets/              # Shaders, Meshes, Materials, Scenes, Textures (loaded at runtime)
+Snowstorm-Tests/     # Catch2 unit tests (GPU-free; run by ctest, gated in CI)
+Engine/              # engine-owned runtime data: Shaders/, Fonts/, and the gitignored cache/
+Projects/Sandbox/    # the sample project: assets/ (scenes, meshes, materials, textures, registry)
+Dataset/             # gitignored capture output + trained weights
 Scripts/             # Generate-Solution.bat (convenience), vcpkg-overlays/ (local port overrides)
 Tools/dxc/           # DirectX Shader Compiler (HLSL -> SPIR-V)
 ```
@@ -222,10 +236,13 @@ in `Snowstorm-Core/CMakeLists.txt`. Keep those two in sync when adding a depende
 ## Git hygiene
 
 `.gitignore` excludes everything generated: `build/`, the vcpkg submodule's build outputs
-(`vcpkg/installed|buildtrees|packages|downloads`), `.vs/`, `Assets/cache`, and all solution/project
-files (`*.sln`, `*.slnx`, `*.vcxproj*`, `*.cmake`, `CMakeCache.txt`, `ALL_BUILD.*`, `ZERO_CHECK.*`,
-`Makefile`). `vcpkg.json` and `CMakePresets.json` are tracked sources despite the blanket `*.json`
-ignore. Never commit generated files or compiled artifacts. Commit messages in English.
+(`vcpkg/installed|buildtrees|packages|downloads`), `.vs/`, `Engine/cache`, the machine-local config
+files (`SnowstormConfig.cfg`, `SnowstormStartup.cfg`), the neural harness's captures and weights
+(`Dataset/`, `*.npy`, `*.ssnn`), downloaded tooling (`Tools/rga/`, `Tools/rdts/`), and all
+solution/project files (`*.sln`, `*.slnx`, `*.vcxproj*`, `*.cmake`, `CMakeCache.txt`, `ALL_BUILD.*`,
+`ZERO_CHECK.*`, `Makefile`). `vcpkg.json`, `CMakePresets.json` and the overlay ports under
+`Scripts/vcpkg-overlays/` are tracked sources despite the blanket `*.json` / `*.cmake` ignores.
+Never commit generated files or compiled artifacts. Commit messages in English.
 
 ## Think like a real engine
 
@@ -338,7 +355,7 @@ Worked example — **asset pipeline** (the engine's current biggest simplificati
 
 - **Use the instrumentation that already exists BEFORE writing ad-hoc probes.** This engine already has
   rich, always-on timing/state readouts — check them first instead of scattering `SS_CORE_WARN` probes:
-  - The editor's **Performance panel** (`Snowstorm-Editor/System/SceneHierarchySystem.cpp`) shows
+  - The editor's **Performance panel** (`Snowstorm-Editor/Source/System/SceneHierarchySystem.cpp`) shows
     per-phase + per-**system** CPU ms, per-**pass GPU** ms (timestamp scopes), draw/batch/instance/
     triangle counts, and cull stats — smoothed and heat-colored. A "which part of the frame is slow"
     question is usually answered by reading this, not by instrumenting.
