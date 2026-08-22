@@ -2140,7 +2140,7 @@ namespace Snowstorm
 		};
 
 		// Headless image-quality capture (#153 increment 2). Runs last, only when quality.capture.frames > 0
-		// (a Scripts/quality-bench.py run): on the target frame it copies the FINAL present (LDR sRGB) + the HDR
+		// (a headless quality-capture run): on the target frame it copies the FINAL present (LDR sRGB) + the HDR
 		// scene color to disk as .npy, so a real-time technique can be diffed (FLIP/PSNR/SSIM) against the
 		// converged path-traced reference offline. Works in BOTH modes (PT and real-time) since both publish the
 		// same present via the shared LDR chain, so it is not gated on compare. Off = zero cost.

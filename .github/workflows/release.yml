@@ -12,27 +12,27 @@ jobs:
     permissions:
       contents: write   # needed to create the GitHub Release
     steps:
-      - name: Checkout
+      - name: Checkout (with the vcpkg submodule)
         uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
         with:
-          python-version: '3.x'
+          submodules: true
 
       - name: Cache vcpkg
         uses: actions/cache@v4
         with:
-          path: vcpkg
-          key: vcpkg-${{ runner.os }}-${{ hashFiles('Scripts/Generate-Solution.py') }}
+          path: |
+            build/vcpkg_installed
+            vcpkg/downloads
+          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json', 'CMakePresets.json', '.gitmodules') }}
           restore-keys: |
             vcpkg-${{ runner.os }}-
 
-      - name: Configure (vcpkg + CMake)
-        run: py Scripts/Generate-Solution.py
+      # The hosted runner image ships VS 2022, so use the v143 preset (the local default is VS 2026).
+      - name: Configure (vcpkg manifest + CMake preset)
+        run: cmake --preset vs2022
 
       - name: Build Release
-        run: cmake --build build --config Release
+        run: cmake --build --preset vs2022-release
 
       # NOTE: first-run verification needed. This bundles the built exes + their
       # adjacent DLLs (vcpkg deploys dependency DLLs next to the exe), plus Assets

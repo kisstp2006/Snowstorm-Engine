@@ -11,143 +11,57 @@ an ImGui editor.
 
 ## Build & run
 
-Toolchain: **CMake + vcpkg**, generating a Visual Studio 2022 solution (toolset `v143`).
-Everything is driven by `Scripts/Generate-Solution.py` (bootstraps vcpkg under `vcpkg/`, installs
-all packages, configures CMake into `build/`):
+Toolchain: **CMake + vcpkg**, no Python. `vcpkg` is a git **submodule** and dependencies are
+declared in the root `vcpkg.json` manifest; `CMakePresets.json` is the single configure entry point
+(generator, pinned MSVC toolset, vcpkg toolchain file, overlay ports). The vcpkg toolchain bootstraps
+`vcpkg.exe` and installs the manifest on the first configure.
 
 ```
-# from repo root (or double-click Scripts/Generate-Solution.bat, which cd's up a level first):
-py Scripts/Generate-Solution.py                 # default triplet x64-windows -> build/Snowstorm.sln
-py Scripts/Generate-Solution.py --clean         # wipe build/ first
-py Scripts/Generate-Solution.py --fresh         # also wipe vcpkg installed/buildtrees (full reinstall)
+git clone --recursive <repo>          # or: git submodule update --init vcpkg
+cmake --preset default                # VS 2026 / v145 -> build/Snowstorm.slnx
+cmake --build --preset debug          # or open build/Snowstorm.slnx in Visual Studio
+ctest --preset debug                  # Catch2 unit tests
 ```
 
-Then open `build/Snowstorm.sln` and build. **Snowstorm-Editor** is the default startup project;
-the debugger working directory is the repo root, so relative `Assets/...` paths resolve. Vulkan
-validation layers are wired via the `VK_ADD_LAYER_PATH` env var (set by the script and in the VS
-debugger environment) pointing at the vcpkg `bin` dir.
+`Scripts/Generate-Solution.bat` wraps the first two lines for double-click use. Visual Studio also
+understands the presets directly (*File > Open > Folder*, pick a preset). There is a `vs2022`
+preset (v143) for machines without VS 2026 — hosted CI uses it. **Snowstorm-Editor** is the
+startup project; the debugger working directory is the repo root, so relative `Assets/...` paths
+resolve. Vulkan validation layers are wired via `VK_ADD_LAYER_PATH` pointing at the manifest's
+installed `bin` dir (`build/vcpkg_installed/x64-windows/bin`), both in the VS debugger environment
+and baked into Debug builds (`SS_VULKAN_LAYER_PATH`).
 
-The first run is slow — vcpkg compiles every dependency from source.
+**The MSVC toolset pin must match what vcpkg builds with.** vcpkg compiles dependencies with the
+newest installed MSVC; the preset pins the project to the same exact version (`toolset` field).
+If they drift (e.g. Catch2 built with 14.51, project on 14.44) the static libs reference vectorized-
+STL symbols the older runtime lacks → `LNK2019 __std_find_*_trivial_pos_1`. When VS updates, bump
+the version in `CMakePresets.json` (14.4x → `v143`, 14.5x → `v145`; the family must match the
+version or CMake rejects it). The first run is slow — vcpkg compiles every dependency from source.
 
 ## Smoke test (run after non-trivial changes)
 
-`Scripts/smoke-test.py` boots each executable headlessly and checks it doesn't crash or log
-errors. It launches every app with `SS_SMOKE_FRAMES` set (the engine then runs that many frames
-and exits cleanly), captures stdout/stderr, enforces a per-app wall-clock timeout (a hang/deadlock
-becomes a failure instead of blocking), checks the exit code, and scans the log for error markers
-(`[error]`/`[critical]`, Vulkan validation, assertion text). Exit 0 = all pass.
+The engine has a built-in headless mode: with `SS_SMOKE_FRAMES=N` (CVar `smoke.frames`) each
+executable runs N frames and exits cleanly. Run both apps this way after any change substantial
+enough to affect runtime behavior (engine/render/ECS/asset code, the frame loop, anything touching
+Vulkan) and check the exit code and the log for `[error]`/`[critical]`, Vulkan validation, or
+assertion text:
 
 ```
-py Scripts/smoke-test.py                 # 120 frames, 60s timeout/app, Debug build
-py Scripts/smoke-test.py --frames 300    # longer soak
-py Scripts/smoke-test.py --only Editor   # single target (Editor | Runtime)
-py Scripts/smoke-test.py --warnings-fail # treat [warning] lines as failures too
-py Scripts/smoke-test.py --strict        # enable deeper Vulkan validation (see below)
+$env:SS_SMOKE_FRAMES=120; $env:SS_VALIDATION_NONFATAL=1
+build\Snowstorm-Editor\Debug\Snowstorm-Editor.exe
+build\Snowstorm-Runtime\Debug\Snowstorm-Runtime.exe
 ```
 
-`--strict` sets `SS_VALIDATION_EXTRA=1`, which enables **synchronization validation** (barrier/
-semaphore/fence hazards) and **best-practices** (perf/usage foot-guns) via `VkValidationFeaturesEXT`.
-These are off by default — they add overhead and best-practices is advisory/noisy. Strict findings
-are logged at `[warning]` level and shown as **notes**, not failures (a strict run still PASSes on
-them); add `--warnings-fail` to gate on them. Genuine validation **errors** are always `[error]`
-level and fail the run in either mode. GPU-assisted validation is not wired up (much heavier) — add
-it when the compute path needs it.
+`SS_VALIDATION_NONFATAL=1` makes every validation error log instead of asserting on the first one,
+so one run surfaces all of them. `SS_VALIDATION_EXTRA=1` additionally enables synchronization and
+best-practices validation (noisy, advisory). It needs a **real GPU/display** (Vulkan), so it is a
+**local** gate — hosted CI only compiles. GPU resources are named via `SetVulkanObjectName`
+(`VK_EXT_debug_utils`), so validation/RenderDoc report e.g. `Swapchain[0]` instead of a raw handle.
 
-**Run it after any change substantial enough to affect runtime behavior** (engine/render/ECS/asset
-code, the frame loop, anything touching Vulkan) — not for docs/comment/build-script-only edits.
-Build first (`cmake --build build --config Debug`), then smoke-test. It needs a **real GPU/display**
-(Vulkan), so it is a **local** gate — it cannot run on hosted CI; the GitHub `build` workflow only
-compiles. The harness sets `VK_ADD_LAYER_PATH` itself so validation layers load.
-
-The harness also sets `SS_VALIDATION_NONFATAL=1`: by default the Vulkan validation messenger
-asserts (and the process dies) on the first ERROR, so you only see one error per run. With this env
-var set, every validation error is logged and the app keeps running, so a single smoke run surfaces
-**all** of them at once — the harness then detects failures by scanning the log, not the exit code.
-Set it yourself when debugging validation interactively. GPU resources are also named via
-`SetVulkanObjectName` (`VK_EXT_debug_utils`), so validation/RenderDoc report e.g. `Swapchain[0]`
-instead of a raw `VkImage 0x...` handle.
-
-## GPU perf benchmark (run before/after any render-path change)
-
-`Scripts/perf-bench.py` is the GPU analogue of the smoke test: a golden-file microbenchmark gate.
-It runs the Editor headlessly once per **RT-effect config** (via `perf.bench.frames` /
-`SS_PERF_BENCH_FRAMES`), each of which averages the render graph's per-pass GPU timings over a fixed
-frame budget and writes a JSON (`PerfBench.hpp` builds it; `Application::Run` drives it past a 15-frame
-warmup that also covers the 1-frame timestamp lag). The script parses each JSON, prints a per-pass
-table, and **diffs against a committed baseline** in `Scripts/perf-baseline/`, failing (exit 1) if any
-pass regresses beyond `--threshold` (default 15%).
-
-```
-py Scripts/perf-bench.py                    # run the matrix, diff vs baseline, PASS/FAIL
-py Scripts/perf-bench.py --update-baseline  # capture current results as the new baseline
-py Scripts/perf-bench.py --only +gi         # one config (rt-off | shadows | +ao | +refl | +gi)
-py Scripts/perf-bench.py --frames 300       # more frames = less noise, slower
-```
-
-The config matrix (`rt-off → shadows → +ao → +refl → +gi`) enables one RT effect at a time, so the
-**Forward-pass ms delta between adjacent configs is that effect's cost** — the RT effects are inline in
-the Forward pass, so this A/B *is* the per-effect timing (there's no separate GPU scope per effect, by
-design). Sub-0.05 ms passes are ignored (timestamp noise). Like smoke, it needs a **real GPU** (Vulkan
-timestamps) so it's a **local** gate, not CI; on a device without timestamp support the JSON sets
-`timestampsSupported:false` and the script skips rather than false-failing. **Baselines are
-per-machine** (GPU differences make ms non-comparable) — re-run `--update-baseline` on a new box, and
-the script warns if the recorded device differs. Re-baseline deliberately (with a commit) when a change
-*intends* to shift perf; never to paper over an unexplained regression.
-
-## Shader occupancy gate (RGA, static)
-
-`Scripts/rga-occupancy.py` is the static analogue of perf-bench: a golden-file gate on shader
-register/LDS pressure and spills, the determinants of GPU occupancy. It needs no GPU run. It feeds
-every compiled SPIR-V module in `Engine/cache/shaders/` through the Radeon GPU Analyzer offline
-compiler for a target ASIC (default `gfx1100`, the RX 7900 XTX), parses the per-shader stats CSV
-(USED_VGPRs/SGPRs, USED_LDS_BYTES, VGPR/SGPR spills, SCRATCH_MEM, ISA_SIZE), collapses each shader's
-permutations to the worst case keyed by base name (so a source edit re-compares the same logical
-shader, not a churning content hash), and diffs against `Scripts/rga-baseline/occupancy-<asic>.json`.
-
-```
-py Scripts/rga-occupancy.py                    # analyse cache, diff vs baseline, PASS/FAIL
-py Scripts/rga-occupancy.py --update-baseline  # capture current results as the new baseline
-py Scripts/rga-occupancy.py --only Reflection  # one shader (base-name substring)
-py Scripts/rga-occupancy.py --livereg --only GIDenoise  # pinpoint the peak live-VGPR instruction
-py Scripts/rga-occupancy.py --dry-run          # print planned RGA invocations, don't run RGA
-```
-
-`--livereg` is an investigation mode (not gated): it runs RGA live-VGPR analysis and prints the
-instruction holding the most live registers, the actionable target for cutting a shader's VGPR count
-(e.g. GIDenoise.comp peaks at 184 live VGPRs around a `v_cndmask` block).
-
-The **primary gate is VGPR-limited occupancy**: RGA's CLI has no occupancy column, so the script
-derives waves/SIMD from the VGPR count using the RDNA3 (gfx11) model (1536 VGPRs/SIMD, 16 waves max,
-<=96 VGPRs => full 16 waves), verified against AMD's docs. It fails (exit 1) when occupancy drops
-(fewer waves), a spill appears (0 to >0, hard fail), or LDS/ISA rises beyond `--threshold`
-(default 10%). Raw VGPR% is intentionally not gated -- a VGPR rise that doesn't cross a wave boundary
-costs nothing. The occupancy is *theoretical* and VGPR-only (LDS occupancy needs the workgroup size
-RGA offline reports as 0); measure achieved occupancy with RGP. On the current baseline only
-`GIDenoise.comp` (192 VGPR -> 8/16 waves) is occupancy-limited; every other shader hits 16/16.
-Stage per module is read from the SPIR-V `OpEntryPoint` execution model, not
-the filename, so the stage-less `IBL*.hlsl` shaders resolve correctly. RGA is **pinned** to a version
-+ SHA-256 in the script (its stats columns and compiler drift between versions, like the clang-format
-pin) and **auto-bootstraps**: if not found via `--rga` / `SS_RGA` / PATH it downloads the pinned
-Windows build into `Tools/rga/` (~238MB, one-time, cached, gitignored), so a fresh box is fully
-headless. The one honest limit: this gates *theoretical* register/occupancy, not *achieved* occupancy
-/ bandwidth / stalls (measure those with RGP, runtime capture, headless via `RadeonDeveloperPanelCLI`),
-and the offline compiler can differ slightly from the live driver. Re-baseline deliberately (with a
-commit) when a change intends to shift register pressure.
-
-**Input SPIR-V (two sources, one baseline).** Locally the gate reads `Engine/cache/shaders/`,
-populated by any editor build+run. But a clean checkout / CI has no cache and no GPU, so
-`Scripts/cook-shaders.py` compiles every shader offline with the engine's exact dxc flags
-(VulkanShader.cpp: profiles `vs/ps/cs_6_5`, entry `main`, `SS_RAYTRACING`/`SS_FP16` permutations)
-into `Engine/cache/shaders-cook/`. The cook reproduces the runtime-cache numbers **bit-for-bit**, so
-both paths gate against the same committed baseline; the baseline is generated from the cook so it
-also covers shaders never exercised in a run (`Metrics.comp`, the `Neural*.comp` passes). Keep
-`cook-shaders.py`'s flags in sync with VulkanShader.cpp (it is a deliberate second copy; no shared
-source of truth today). `cook-shaders.py` also replaced the stale `check_shaders.py` (which still
-expected the old `#type` split and silently compiled nothing).
-
-**This gate runs in CI** (`.github/workflows/shaders.yml`): unlike smoke-test and perf-bench, RGA is
-static and needs no GPU, so hosted CI cooks the shaders and runs the occupancy gate on every shader
-change. RGA is cached across runs (actions/cache) so only the first pays the download.
+The engine also keeps its headless instrumentation hooks (`perf.bench.frames` writes averaged
+per-pass GPU timings to JSON; `quality.capture.frames` dumps the final present) for ad-hoc A/B
+measurement and RenderDoc/RGP/RGA sessions; there is no longer a scripted baseline-diff gate around
+them — compare runs by hand and re-check with the editor's Performance panel.
 
 ## Console variables (CVars)
 
@@ -160,8 +74,7 @@ A CVar named `validation.extra` is set by env `SS_VALIDATION_EXTRA` **or** CLI `
 (dots→`_`, uppercased, `SS_` prefix for env). Bools accept presence (`--flag`, or env set to
 anything but `0`/`false`/`off`/`no`). Run any executable with `--list-cvars` (or `--help`) to print
 every CVar with its value, type, env name, and description. Current CVars: `smoke.frames`,
-`validation.nonfatal`, `validation.extra` (the smoke harness still sets the matching env vars, so
-nothing about running it changed). Startup resolution is read-once (env → CLI), but CVars can now also
+`validation.nonfatal`, `validation.extra`. Startup resolution is read-once (env → CLI), but CVars can now also
 be **edited live at runtime** from the editor's *Debug > Console Variables* panel (`CVarPanelSystem`):
 it lists every CVar with a type-appropriate widget (checkbox/int/float) plus a `name value` command
 line, via typed accessors on `ICVar` (`GetKind`/`Get*`/`Set*`). Most engine CVars are read per-frame
@@ -177,7 +90,7 @@ Snowstorm-Core/      # STATIC library: all engine code (the only place most work
 Snowstorm-Editor/    # Editor EXECUTABLE — links Core; ImGui dockspace, panels, viewport
 Snowstorm-Runtime/   # Editor-free runtime EXECUTABLE — links Core; shares RegisterCoreSystems (WIP)
 Assets/              # Shaders, Meshes, Materials, Scenes, Textures (loaded at runtime)
-Scripts/             # Generate-Solution.{py,bat}
+Scripts/             # Generate-Solution.bat (convenience), vcpkg-overlays/ (local port overrides)
 Tools/dxc/           # DirectX Shader Compiler (HLSL -> SPIR-V)
 ```
 
@@ -239,13 +152,11 @@ see, so treat it as part of the feature, not an afterthought.
   under `Snowstorm-Core/Source/` is picked up after re-running CMake (re-generate the solution).
 - **Formatting (format-on-touch):** the repo has a `.clang-format`. The `lint` CI checks the C++
   files changed by a push/PR and **fails if any touched file isn't fully clang-format-clean**, so the
-  codebase formats gradually as files are edited. Pinned to **`clang-format==22.1.5`** (match it
-  locally — version drift changes output). Run `clang-format -i <files>` (or enable format-on-save
-  against the repo config) before committing. `Scripts/check-format.py` predicts this gate locally:
-  default mode checks the files changed vs `master` + uncommitted (the same set CI gates on), `--all`
-  scans the whole project (surfaces the legacy backlog CI does *not* gate on), `--fix` reformats in
-  place. A tracked `pre-push` hook (`.githooks/pre-push`) runs the default mode so a lint-failing push
-  is blocked before it leaves the machine — **enable it once per clone** with
+  codebase formats gradually as files are edited. CI uses **clang-format 22.x** (match it locally —
+  version drift changes output). Run `clang-format -i <files>` (or enable format-on-save against the
+  repo config) before committing. A tracked `pre-push` hook (`.githooks/pre-push`, plain bash) checks
+  the files changed vs `master` + uncommitted (the same set CI gates on) so a lint-failing push is
+  blocked before it leaves the machine — **enable it once per clone** with
   `git config core.hooksPath .githooks` (bypass a single push with `git push --no-verify`).
 - **Shared-header shader bindings are global — mind `space1` collisions (learned from #60).** A
   resource declared in `Engine/Shaders/Include/Engine.hlsli` is emitted into *every* shader that
@@ -262,16 +173,18 @@ see, so treat it as part of the feature, not an afterthought.
 
 ## Dependencies (vcpkg, x64-windows)
 
-assimp, EnTT, fmt, glew, glfw3, glm, imgui (vulkan+glfw bindings, docking), rttr, spdlog, stb,
-Vulkan SDK, vulkan-memory-allocator, gli, volk, spirv-reflect, nlohmann-json. The canonical list
-is `PACKAGES` in `Scripts/Generate-Solution.py`; the linkage is in `Snowstorm-Core/CMakeLists.txt`.
-Keep those two in sync when adding a dependency.
+assimp, EnTT, fmt, glew, glfw3, glm, imgui (vulkan+glfw bindings, docking), imguizmo, rttr,
+spdlog, stb, Vulkan SDK + validation layers, vulkan-memory-allocator, gli, volk, spirv-reflect,
+nlohmann-json, catch2, tracy. The canonical list is the root `vcpkg.json` manifest; the linkage is
+in `Snowstorm-Core/CMakeLists.txt`. Keep those two in sync when adding a dependency.
 
 ## Git hygiene
 
-`.gitignore` excludes everything generated: `build/`, `vcpkg/`, `.vs/`, `Assets/cache`, and all
-solution/project files (`*.sln`, `*.vcxproj*`, `*.cmake`, `CMakeCache.txt`, `ALL_BUILD.*`,
-`ZERO_CHECK.*`, `Makefile`). Never commit those or compiled artifacts. Commit messages in English.
+`.gitignore` excludes everything generated: `build/`, the vcpkg submodule's build outputs
+(`vcpkg/installed|buildtrees|packages|downloads`), `.vs/`, `Assets/cache`, and all solution/project
+files (`*.sln`, `*.slnx`, `*.vcxproj*`, `*.cmake`, `CMakeCache.txt`, `ALL_BUILD.*`, `ZERO_CHECK.*`,
+`Makefile`). `vcpkg.json` and `CMakePresets.json` are tracked sources despite the blanket `*.json`
+ignore. Never commit generated files or compiled artifacts. Commit messages in English.
 
 ## Think like a real engine
 
@@ -340,9 +253,9 @@ Worked example — **asset pipeline** (the engine's current biggest simplificati
 
 - This is graphics code: "renders/looks correct" can only be confirmed by **building and running**
   on a machine with a GPU/display. Headless verification is not possible — say so when you can't run it.
-- After non-trivial runtime changes, **build then run `Scripts/smoke-test.py`** (see Smoke test
-  above) — it catches crashes, hangs, and Vulkan validation/assertion errors that compilation can't.
-  A clean smoke run is the minimum bar before claiming a runtime change works.
+- After non-trivial runtime changes, **build then run both exes headlessly with `SS_SMOKE_FRAMES`**
+  (see Smoke test above) — it catches crashes, hangs, and Vulkan validation/assertion errors that
+  compilation can't. A clean smoke run is the minimum bar before claiming a runtime change works.
 - Confirm behavior against the actual source/build, not from names. Mark unverified statements as
   assumptions.
 

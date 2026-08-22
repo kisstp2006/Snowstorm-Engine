@@ -14,29 +14,29 @@ jobs:
   windows:
     runs-on: windows-2022
     steps:
-      - name: Checkout
+      - name: Checkout (with the vcpkg submodule)
         uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
         with:
-          python-version: '3.x'
+          submodules: true
 
-      # vcpkg builds every dependency from source, which is slow. Cache the bootstrapped
-      # vcpkg tree (incl. installed packages) keyed on the package list in the generate script.
+      # vcpkg builds every dependency from source, which is slow. Cache the installed tree
+      # (manifest mode installs into build/vcpkg_installed) keyed on the manifest.
       - name: Cache vcpkg
         uses: actions/cache@v4
         with:
-          path: vcpkg
-          key: vcpkg-${{ runner.os }}-${{ hashFiles('Scripts/Generate-Solution.py') }}
+          path: |
+            build/vcpkg_installed
+            vcpkg/downloads
+          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json', 'CMakePresets.json', '.gitmodules') }}
           restore-keys: |
             vcpkg-${{ runner.os }}-
 
-      - name: Configure (vcpkg + CMake)
-        run: py Scripts/Generate-Solution.py
+      # The hosted runner image ships VS 2022, so use the v143 preset (the local default is VS 2026).
+      - name: Configure (vcpkg manifest + CMake preset)
+        run: cmake --preset vs2022
 
       - name: Build all targets
-        run: cmake --build build --config Debug
+        run: cmake --build --preset vs2022-debug
 
       - name: Run tests
-        run: ctest --test-dir build -C Debug --output-on-failure
+        run: ctest --preset vs2022-debug

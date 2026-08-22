@@ -3,15 +3,14 @@
 .venv/
 build/
 Vendor/Binaries
-vcpkg/
+# vcpkg itself is a git submodule; only its build outputs are ignored.
+vcpkg/installed/
+vcpkg/buildtrees/
+vcpkg/packages/
+vcpkg/downloads/
 Engine/cache
-# Cached PT references for the image-quality gate (per-machine, regenerated on demand). See Scripts/quality-bench.py.
-Scripts/.quality-ref-cache/
-# Radeon GPU Analyzer, auto-bootstrapped (pinned version, ~238MB) by Scripts/rga-occupancy.py.
-# Downloaded tool, not source — never commit.
+# Downloaded AMD tools (Radeon GPU Analyzer / Developer Tool Suite), not source — never commit.
 Tools/rga/
-# Radeon Developer Tool Suite (RGP/RDP/RDS), bootstrapped by Scripts/rgp-capture.py. Downloaded
-# tool, not source — never commit.
 Tools/rdts/
 
 # Files
@@ -19,18 +18,14 @@ Tools/rdts/
 *.vcxproj.user
 *.vcxproj.filters
 *.sln
+*.slnx
 *.log
 *.json
-# Committed golden perf baselines (not generated artifacts): re-included past the blanket *.json so the
-# perf-bench regression gate has a tracked reference. See Scripts/perf-bench.py.
-!Scripts/perf-baseline/
-!Scripts/perf-baseline/*.json
-# Committed golden occupancy baselines for the RGA static gate. See Scripts/rga-occupancy.py.
-!Scripts/rga-baseline/
-!Scripts/rga-baseline/*.json
-# Committed golden image-quality baselines for the FLIP/PSNR/SSIM gate. See Scripts/quality-bench.py.
-!Scripts/quality-baseline/
-!Scripts/quality-baseline/*.json
+# Build entry points are real sources despite the blanket *.json ignore.
+!vcpkg.json
+!CMakePresets.json
+# Per-user preset overrides stay local.
+CMakeUserPresets.json
 *.DotSettings
 *.DotSettings.user
 *.ini

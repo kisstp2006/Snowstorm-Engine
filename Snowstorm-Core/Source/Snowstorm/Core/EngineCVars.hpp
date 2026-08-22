@@ -14,14 +14,14 @@ namespace Snowstorm::CVars
 
 	// Headless GPU perf benchmark (local regression gate, GPU analogue of smoke.frames). When > 0, run
 	// this many frames accumulating per-pass GPU timings (RendererService::GetGpuPassTimes) past warmup,
-	// write an averaged JSON to perf.bench.path, then exit. Scripts/perf-bench.py drives configs + diffs a
+	// write an averaged JSON to perf.bench.path, then exit. An external driver runs configs + diffs a
 	// committed baseline. CLI/env-only (not persisted), like smoke.frames.
 	extern CVar<int> PerfBenchFrames;
 	extern CVar<std::string> PerfBenchPath;
 
 	// Headless quality capture (local image-quality gate, #153 increment 2). When > 0, let the frame render
 	// this many times (so a static camera accumulates the reference path tracer / warms the real-time path),
-	// then copy the final present (LDR sRGB) + HDR scene color to disk as .npy and exit. Scripts/quality-bench.py
+	// then copy the final present (LDR sRGB) + HDR scene color to disk as .npy and exit. An external driver
 	// drives (viewpoint x technique) runs and diffs FLIP/PSNR/SSIM against a committed baseline. CLI/env-only.
 	// Override the resolved viewport camera pose at startup: "px,py,pz,rx,ry,rz" (world position + Euler
 	// rotation in radians), empty = off. Lets a headless harness (quality-bench, #158) pin a deterministic

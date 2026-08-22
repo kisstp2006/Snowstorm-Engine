@@ -18,15 +18,17 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.x'
-
-      # Pin clang-format so CI matches local formatting exactly (version drift between
-      # clang-format releases changes output and would cause spurious failures).
-      - name: Install clang-format
-        run: pip install clang-format==22.1.5
+      # Pin the clang-format major so CI matches local formatting (version drift between
+      # clang-format releases changes output and would cause spurious failures). Installed from
+      # the LLVM apt repo (no Python/pip); use the same 22.x locally.
+      - name: Install clang-format 22
+        run: |
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/llvm.gpg
+          echo "deb [signed-by=/usr/share/keyrings/llvm.gpg] http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-22 main" | sudo tee /etc/apt/sources.list.d/llvm.list
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang-format-22
+          sudo ln -sf /usr/bin/clang-format-22 /usr/local/bin/clang-format
+          clang-format --version
 
       # Format-on-touch policy: any C++ file changed by this push/PR must be fully
       # clang-format clean (whole file). The codebase formats gradually as files are touched.

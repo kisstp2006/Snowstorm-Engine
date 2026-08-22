@@ -1,0 +1,31 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "snowstorm",
+  "version-string": "0.1.0",
+  "description": "Snowstorm Engine dependencies (vcpkg manifest; see CMakePresets.json for the configure entry point)",
+  "dependencies": [
+    "vulkan",
+    "vulkan-validationlayers",
+    "glfw3",
+    "glew",
+    "spdlog",
+    "fmt",
+    "assimp",
+    "glm",
+    "stb",
+    "entt",
+    {
+      "name": "imgui",
+      "features": [ "vulkan-binding", "glfw-binding", "docking-experimental" ]
+    },
+    "imguizmo",
+    "rttr",
+    "gli",
+    "volk",
+    "vulkan-memory-allocator",
+    "spirv-reflect",
+    "nlohmann-json",
+    "catch2",
+    "tracy"
+  ]
+}

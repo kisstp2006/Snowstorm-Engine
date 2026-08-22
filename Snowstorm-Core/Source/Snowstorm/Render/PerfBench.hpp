@@ -12,7 +12,7 @@ namespace Snowstorm
 	// Headless GPU perf-benchmark accumulator + serializer (pure, engine-free logic so it's unit-testable
 	// — the WriteNpy / HaltonJitter pattern). Application::Run feeds it the per-frame GpuScope list
 	// (RendererService::GetGpuPassTimes) over a sample window; on exit it serializes averaged per-pass ms
-	// to a deterministic JSON that Scripts/perf-bench.py diffs against a committed baseline. No file I/O or
+	// to a deterministic JSON an external driver can diff against a reference run. No file I/O or
 	// GPU calls here beyond the final ToJson string build; the caller owns the ofstream.
 	class PerfBenchAccumulator
 	{

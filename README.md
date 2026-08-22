@@ -57,23 +57,26 @@ Catch2 · PyTorch (neural training)
 
 ### Prerequisites
 
-- Windows, Visual Studio 2022 (toolset `v143`)
-- CMake 3.16+, Python 3, Git
+- Windows, Visual Studio 2026 (MSVC `v145`; a `vs2022` preset exists for `v143`)
+- CMake 3.21+, Git
 
-vcpkg and all dependencies are bootstrapped by the generation script. The first run is slow because
-vcpkg builds every dependency from source.
+No Python. vcpkg is a git submodule and dependencies are declared in `vcpkg.json`; the vcpkg
+toolchain bootstraps itself and installs them on the first CMake configure. The first run is slow
+because vcpkg builds every dependency from source.
 
 ### Build & run
 
 ```bat
-:: from the repository root; --clean wipes build/ first, --fresh also reinstalls vcpkg packages
-py Scripts\Generate-Solution.py
+git clone --recursive <repo>      :: or, in an existing clone: git submodule update --init vcpkg
+cmake --preset default            :: configure + vcpkg install -> build\Snowstorm.slnx
+cmake --build --preset debug      :: or open build\Snowstorm.slnx in Visual Studio
 ```
 
-The script bootstraps vcpkg into `vcpkg/`, installs dependencies, and configures CMake into
-`build/`. Open `build/Snowstorm.sln` and build. **Snowstorm-Editor** is the default startup project;
-the debugger working directory is the repo root so relative `Engine/...` and `Projects/...` paths
-resolve. Vulkan validation layers are wired via `VK_ADD_LAYER_PATH`.
+`Scripts\Generate-Solution.bat` does the first two steps on double-click. Visual Studio can also open
+the folder directly and pick the preset. **Snowstorm-Editor** is the default startup project; the
+debugger working directory is the repo root so relative `Engine/...` and `Projects/...` paths
+resolve. Vulkan validation layers are wired via `VK_ADD_LAYER_PATH`. The preset pins the MSVC
+version to the one vcpkg builds with — if Visual Studio updates, bump it in `CMakePresets.json`.
 
 ## Project structure
 
@@ -87,7 +90,7 @@ resolve. Vulkan validation layers are wired via `VK_ADD_LAYER_PATH`.
 ```
 Engine/            engine-owned runtime assets: Shaders/ (HLSL), Fonts/, cooked caches
 Projects/Sandbox/  the default project (.ssproj) with its own assets/ (Meshes, Materials, Scenes)
-Scripts/           Generate-Solution.py/.bat, smoke-test.py, perf-bench.py
+Scripts/           Generate-Solution.bat, vcpkg-overlays/ (local port overrides)
 Tools/dxc/         DirectX Shader Compiler (HLSL -> SPIR-V)
 Tools/neural/      PyTorch training harness for the neural upscaler (exports .ssnn weights)
 Tools/tracy/       Tracy profiler GUI (connect to a running Debug build)
@@ -98,13 +101,14 @@ Executables link the Core static library and add its `Source/` directory to thei
 ## Testing
 
 ```bat
-build\Snowstorm-Tests\Debug\Snowstorm-Tests.exe   :: Catch2 unit tests
-py Scripts\smoke-test.py                           :: boots each exe for N frames, checks crashes/errors
-py Scripts\perf-bench.py                           :: averages per-pass GPU timings, diffs vs baseline
+ctest --preset debug                              :: Catch2 unit tests
+set SS_SMOKE_FRAMES=120                           :: headless smoke: run N frames, exit; check log for [error]
+build\Snowstorm-Editor\Debug\Snowstorm-Editor.exe
+build\Snowstorm-Runtime\Debug\Snowstorm-Runtime.exe
 ```
 
-The smoke test and perf benchmark need a real GPU/display (Vulkan), so they are local gates, not CI
-jobs (hosted CI only compiles).
+The smoke run needs a real GPU/display (Vulkan), so it is a local gate, not a CI job (hosted CI only
+compiles and runs the unit tests).
 
 ## Documentation
 

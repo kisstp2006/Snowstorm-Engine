@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.21)  # CMakePresets.json v3
 project(Snowstorm LANGUAGES CXX)
 
 # Global settings
@@ -30,7 +30,11 @@ set_property(DIRECTORY PROPERTY VS_STARTUP_PROJECT "Snowstorm-Editor")
 set_property(TARGET Snowstorm-Editor PROPERTY VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
 set_property(TARGET Snowstorm-Runtime PROPERTY VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
 
-set(VCPKG_LAYER_PATH "${CMAKE_SOURCE_DIR}/vcpkg/installed/${VCPKG_TARGET_TRIPLET}/bin")
+# vcpkg manifest mode (vcpkg.json) installs into the build tree; the toolchain exports the location.
+if(NOT DEFINED VCPKG_INSTALLED_DIR)
+    set(VCPKG_INSTALLED_DIR "${CMAKE_BINARY_DIR}/vcpkg_installed")
+endif()
+set(VCPKG_LAYER_PATH "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin")
 
 # Set Vulkan validation layer path environment variable
 set(VK_ENV "VK_ADD_LAYER_PATH=${VCPKG_LAYER_PATH}")
