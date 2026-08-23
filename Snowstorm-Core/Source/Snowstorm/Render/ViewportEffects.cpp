@@ -959,7 +959,7 @@ namespace Snowstorm
 				const Ref<TextureView> depthView = gbufDesc.DepthAttachment->View;      // fp32 D32 depth
 				const Ref<TextureView> shadowView = v.RT.ShadowTargetView;
 				const Ref<TextureView> shadowSpecView = v.RT.ShadowSpecTargetView; // demodulated specular output
-				const glm::vec3 camPos = v.Cam.Position;                // world-space camera pos for V in the specular BRDF
+				const glm::vec3 camPos = v.Cam.Position;                           // world-space camera pos for V in the specular BRDF
 				// Reconstruct from THIS frame's JITTERED camera VP (the matrix the jittered DepthNormal prepass +
 				// the forward color pass both use, so effect and geometry silhouettes align), NOT GetFrameData().
 				// ViewProjection which still holds the previous frame's forward matrix at build time — see AOEffect.
@@ -1624,8 +1624,15 @@ namespace Snowstorm
 				// landing we instead skip early-Z when MSAA is on and let the forward clear + resolve its own
 				// multisampled target directly (v.RT.Target already carries the resolve). Tradeoff: MSAA loses
 				// the early-Z overdraw win (~2.5ms); restoring it (an MSAA prepass) is a clean later step.
-				const bool earlyZ = (CVars::MsaaSampleCount() == 1);
-				if (earlyZ && sceneDesc.DepthAttachment.has_value() && !sceneDesc.ColorAttachments.empty())
+				//
+				// The gate asks the DEPTH ATTACHMENT how many samples it has, not render.msaa. The CVar flips a
+				// frame before ViewportResizeSystem reallocates the targets, so on the frame MSAA is switched
+				// OFF the CVar already reads 1 while this depth is still multisampled -- and the prepass
+				// pipeline (built single-sample) against a 2x depth view is a validation error, not a wrong
+				// picture. The attachment cannot be stale about itself, so this cannot desync.
+				const bool hasSceneDepth = sceneDesc.DepthAttachment.has_value() && !sceneDesc.ColorAttachments.empty();
+				const bool earlyZ = hasSceneDepth && sceneDesc.DepthAttachment->View->GetTexture()->GetDesc().SampleCount == 1;
+				if (earlyZ)
 				{
 					const Ref<TextureView> sceneColorView = sceneDesc.ColorAttachments[0].View;
 					const Ref<TextureView> sceneDepthView = sceneDesc.DepthAttachment->View;
