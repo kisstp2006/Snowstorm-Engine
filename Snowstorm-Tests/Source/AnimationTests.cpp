@@ -281,3 +281,58 @@ TEST_CASE("Posed bounds contain the skinned mesh, and never shrink below it", "[
 		REQUIRE(NearlyEqual(posed.Box.Max, bind.Box.Max));
 	}
 }
+
+TEST_CASE("Blending two poses interpolates every bone, and the ends are the inputs", "[animation][blend]")
+{
+	Pose a;
+	a.BoneTransforms = {
+	    {.Translation = glm::vec3(0.0f), .Rotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f), .Scale = glm::vec3(1.0f)},
+	    {.Translation = glm::vec3(0.0f, 2.0f, 0.0f), .Rotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f), .Scale = glm::vec3(1.0f)},
+	};
+	Pose b;
+	b.BoneTransforms = {
+	    {.Translation = glm::vec3(4.0f, 0.0f, 0.0f), .Rotation = glm::angleAxis(glm::half_pi<float>(), glm::vec3(0, 0, 1)), .Scale = glm::vec3(3.0f)},
+	    {.Translation = glm::vec3(0.0f, 6.0f, 0.0f), .Rotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f), .Scale = glm::vec3(1.0f)},
+	};
+
+	Pose out;
+	// w=0 and w=1 must reproduce the inputs exactly, or a finished transition would not equal the clip it
+	// transitioned into -- the pose would settle a hair off and never converge.
+	BlendPoses(a, b, 0.0f, out);
+	REQUIRE(NearlyEqual(out.BoneTransforms[0].Translation, a.BoneTransforms[0].Translation));
+	REQUIRE(NearlyEqual(out.BoneTransforms[0].Scale, a.BoneTransforms[0].Scale));
+	BlendPoses(a, b, 1.0f, out);
+	REQUIRE(NearlyEqual(out.BoneTransforms[0].Translation, b.BoneTransforms[0].Translation));
+	REQUIRE(NearlyEqual(out.BoneTransforms[0].Scale, b.BoneTransforms[0].Scale));
+
+	BlendPoses(a, b, 0.5f, out);
+	REQUIRE(out.BoneTransforms.size() == 2);
+	REQUIRE(NearlyEqual(out.BoneTransforms[0].Translation, glm::vec3(2.0f, 0.0f, 0.0f)));
+	REQUIRE(NearlyEqual(out.BoneTransforms[0].Scale, glm::vec3(2.0f)));
+	// Halfway between identity and a 90-degree turn is 45 degrees: rotate +X and check where it lands.
+	const glm::vec3 rotated = out.BoneTransforms[0].Rotation * glm::vec3(1.0f, 0.0f, 0.0f);
+	REQUIRE(NearlyEqual(rotated, glm::vec3(glm::root_two<float>() * 0.5f, glm::root_two<float>() * 0.5f, 0.0f)));
+	// A bone both poses agree on must come out untouched at any weight.
+	REQUIRE(NearlyEqual(out.BoneTransforms[1].Translation, glm::vec3(0.0f, 4.0f, 0.0f)));
+}
+
+TEST_CASE("A blend takes the shortest arc between rotations", "[animation][blend]")
+{
+	// q and -q are the SAME rotation. Blending towards the negated form must still travel the short way;
+	// a naive slerp on the raw pair sweeps ~350 degrees instead of ~10 and the limb visibly spins.
+	const glm::quat start = glm::angleAxis(glm::radians(10.0f), glm::vec3(0, 0, 1));
+	const glm::quat endNegated = -glm::angleAxis(glm::radians(20.0f), glm::vec3(0, 0, 1));
+
+	Pose a;
+	a.BoneTransforms = {{.Translation = glm::vec3(0.0f), .Rotation = start, .Scale = glm::vec3(1.0f)}};
+	Pose b;
+	b.BoneTransforms = {{.Translation = glm::vec3(0.0f), .Rotation = endNegated, .Scale = glm::vec3(1.0f)}};
+
+	Pose out;
+	BlendPoses(a, b, 0.5f, out);
+
+	// Halfway between 10 and 20 degrees is 15 -- NOT somewhere out on the far side of the circle.
+	const glm::vec3 rotated = out.BoneTransforms[0].Rotation * glm::vec3(1.0f, 0.0f, 0.0f);
+	const glm::vec3 expected = glm::angleAxis(glm::radians(15.0f), glm::vec3(0, 0, 1)) * glm::vec3(1.0f, 0.0f, 0.0f);
+	REQUIRE(NearlyEqual(rotated, expected));
+}

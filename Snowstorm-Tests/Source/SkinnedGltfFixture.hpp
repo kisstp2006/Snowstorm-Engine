@@ -28,7 +28,10 @@ namespace SnowstormTests
 	// The model is a 2x4 quad standing on the origin, bound to two bones:
 	//   Root  at (0,0,0)      <- the two bottom vertices
 	//   Child at (0,2,0)      <- the two top vertices
-	// and one clip that rotates Root 90 degrees about +Z over one second.
+	// and two clips, both driving the same 90-degree rotation about +Z over one second but on different
+	// bones -- "Spin" turns Root (so the whole quad swings), "Bend" turns Child (so only the top does).
+	// Two clips that differ in WHICH bone they touch is what makes a crossfade between them observable:
+	// halfway through the blend both bones are half-rotated, which neither clip produces on its own.
 	class SkinnedGltfFixture
 	{
 	public:
@@ -146,11 +149,18 @@ namespace SnowstormTests
   ],
   "meshes": [ { "primitives": [ { "attributes": { "POSITION": 0, "JOINTS_0": 1, "WEIGHTS_0": 2 }, "indices": 3 } ] } ],
   "skins": [ { "joints": [ 1, 2 ], "inverseBindMatrices": 4 } ],
-  "animations": [ {
-    "name": "Spin",
-    "samplers": [ { "input": 5, "output": 6, "interpolation": "LINEAR" } ],
-    "channels": [ { "sampler": 0, "target": { "node": 1, "path": "rotation" } } ]
-  } ],
+  "animations": [
+    {
+      "name": "Spin",
+      "samplers": [ { "input": 5, "output": 6, "interpolation": "LINEAR" } ],
+      "channels": [ { "sampler": 0, "target": { "node": 1, "path": "rotation" } } ]
+    },
+    {
+      "name": "Bend",
+      "samplers": [ { "input": 5, "output": 6, "interpolation": "LINEAR" } ],
+      "channels": [ { "sampler": 0, "target": { "node": 2, "path": "rotation" } } ]
+    }
+  ],
   "buffers": [ { "uri": "fixture.bin", "byteLength": 308 } ],
   "bufferViews": [
     { "buffer": 0, "byteOffset": 0,   "byteLength": 48,  "target": 34962 },

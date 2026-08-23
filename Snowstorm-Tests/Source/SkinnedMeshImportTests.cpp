@@ -77,15 +77,23 @@ TEST_CASE("A skinned glTF imports its skeleton, weights and clips", "[animation]
 		}
 	}
 
-	SECTION("The clip is named, is one second long, and drives the root bone")
+	SECTION("Every clip in the file is imported, named, and bound to the bone it drives")
 	{
-		REQUIRE(model->Clips.size() == 1);
-		const AnimationClip& clip = model->Clips.front();
-		REQUIRE(clip.GetName() == "Spin");
-		REQUIRE(clip.GetDuration() == Catch::Approx(1.0f).margin(1e-3));
-		REQUIRE(clip.GetTrackCount() == 1);
-		REQUIRE(clip.GetTrackBoneName(0) == "Root");
-		REQUIRE(clip.GetTrack(0).RotationKeys.size() == 2);
+		// The fixture carries two clips that share their keyframes but target different bones, so this also
+		// pins that import keeps them SEPARATE rather than merging channels into one clip.
+		REQUIRE(model->Clips.size() == 2);
+
+		const AnimationClip& spin = model->Clips[0];
+		REQUIRE(spin.GetName() == "Spin");
+		REQUIRE(spin.GetDuration() == Catch::Approx(1.0f).margin(1e-3));
+		REQUIRE(spin.GetTrackCount() == 1);
+		REQUIRE(spin.GetTrackBoneName(0) == "Root");
+		REQUIRE(spin.GetTrack(0).RotationKeys.size() == 2);
+
+		const AnimationClip& bend = model->Clips[1];
+		REQUIRE(bend.GetName() == "Bend");
+		REQUIRE(bend.GetTrackCount() == 1);
+		REQUIRE(bend.GetTrackBoneName(0) == "Child");
 	}
 
 	SECTION("Sampling the clip and skinning moves the vertices where the animation says")

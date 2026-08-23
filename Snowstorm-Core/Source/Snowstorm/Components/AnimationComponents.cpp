@@ -21,7 +21,8 @@ namespace Snowstorm
 		    .property("Playing", &AnimationComponent::Playing)
 		    .property("Loop", &AnimationComponent::Loop)
 		    .property("Speed", &AnimationComponent::Speed)(metadata("Speed", 0.01f))
-		    .property("Time", &AnimationComponent::Time)(metadata("Min", 0.0f), metadata("Speed", 0.01f));
+		    .property("Time", &AnimationComponent::Time)(metadata("Min", 0.0f), metadata("Speed", 0.01f))
+		    .property("BlendDuration", &AnimationComponent::BlendDuration)(metadata("Min", 0.0f), metadata("Speed", 0.01f));
 	}
 
 	AUTO_REGISTER_COMPONENT(SkeletalMeshComponent);

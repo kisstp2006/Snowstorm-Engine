@@ -1,5 +1,7 @@
 #include "AnimationClip.hpp"
 
+#include "Snowstorm/Core/Base.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -166,6 +168,40 @@ namespace Snowstorm
 			const uint32_t parent = skeleton.GetParentBoneIndex(bone);
 			outMatrices[bone] = parent == Skeleton::NullIndex ? local : outMatrices[parent] * local;
 		}
+	}
+
+	void BlendPoses(const Pose& a, const Pose& b, const float w, Pose& outResult)
+	{
+		// A blend between poses of different lengths has no meaning (the bone indices would not line up), so
+		// fail loudly rather than silently blending a prefix.
+		SS_CORE_ASSERT(a.BoneTransforms.size() == b.BoneTransforms.size(),
+		               "BlendPoses: poses come from different skeletons ({} vs {} bones)",
+		               a.BoneTransforms.size(), b.BoneTransforms.size());
+
+		const size_t boneCount = std::min(a.BoneTransforms.size(), b.BoneTransforms.size());
+		outResult.BoneTransforms.resize(boneCount);
+		for (size_t i = 0; i < boneCount; ++i)
+		{
+			const BoneTransform& from = a.BoneTransforms[i];
+			const BoneTransform& to = b.BoneTransforms[i];
+			BoneTransform& out = outResult.BoneTransforms[i];
+			out.Translation = glm::mix(from.Translation, to.Translation, w);
+			out.Scale = glm::mix(from.Scale, to.Scale, w);
+			// Shortest arc: q and -q are the SAME rotation, but slerp between an unflipped pair travels the
+			// long way round (a limb spinning 350 degrees instead of 10). Flipping the sign when the pair
+			// points away from each other is what every engine's blend does, and it is why this cannot be a
+			// component-wise lerp.
+			glm::quat toRotation = to.Rotation;
+			if (glm::dot(from.Rotation, toRotation) < 0.0f)
+			{
+				toRotation = -toRotation;
+			}
+			out.Rotation = glm::normalize(glm::slerp(from.Rotation, toRotation, w));
+		}
+
+		// The blended pose is not "at" either clip's time; report the time it is being driven towards, which
+		// is what a diagnostic readout (and later, root motion) cares about.
+		outResult.TimePos = glm::mix(a.TimePos, b.TimePos, w);
 	}
 
 	void ComputeSkinningMatrices(const Skeleton& skeleton, const Pose& pose, std::vector<glm::mat4>& outMatrices)

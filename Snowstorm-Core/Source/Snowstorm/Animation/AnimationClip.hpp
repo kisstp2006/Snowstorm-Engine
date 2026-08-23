@@ -87,6 +87,20 @@ namespace Snowstorm
 		std::vector<std::string> m_TrackBoneNames; // parallel to m_Tracks
 	};
 
+	// Bone-local blend of two poses: `outResult` = `a` at w=0, `b` at w=1, per bone. Translation and scale
+	// lerp; rotation SLERPS, which is the whole reason this is a function rather than a loop of lerps -- a
+	// component-wise quaternion lerp shortens the arc and makes a limb wobble through the middle of a turn.
+	//
+	// Both poses must be sampled from the SAME skeleton, so their bone arrays are index-parallel; a pose is
+	// bone-local, which is what makes a per-bone blend meaningful at all (blending model-space transforms
+	// would stretch bones instead of rotating them).
+	//
+	// The signature deliberately mirrors Hazel's BlendBoneTransforms(pose0, pose1, w, result), so the two
+	// variants that come next -- blending only a sub-tree from a root bone (Unreal's "layered blend per
+	// bone") and additive blending -- slot in beside it rather than replacing it. Neither has a caller yet,
+	// so neither is here.
+	void BlendPoses(const Pose& a, const Pose& b, float w, Pose& outResult);
+
 	// The matrices a skinning shader consumes: for each bone, model-space pose * inverse bind. A vertex is
 	// skinned as sum(weight_i * SkinningMatrix[bone_i] * vertexPosition), so feeding the REST pose here
 	// yields identity matrices and leaves the mesh in its bind shape -- which is the cheapest sanity check
